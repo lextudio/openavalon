@@ -1,0 +1,3 @@
+[submodule "LibreWPF"]
+	path = LibreWPF
+	url = https://github.com/lextudio/LibreWPF.git
