@@ -11,11 +11,13 @@ winforms_root="${wpf_root}/external/LibreWinForms"
 local_feed="${DIST_LOCAL_FEED:-${repo_root}/artifacts/local-feed}"
 local_feed_name="${DIST_LOCAL_FEED_NAME:-openavalon-local}"
 
-dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.42}"
-progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.48}"
+dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.57}"
+progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.55}"
 
 wpf_dotnet="${wpf_root}/.dotnet/dotnet"
-if [[ ! -x "${wpf_dotnet}" ]]; then
+if [[ ! -x "${wpf_dotnet}" && -x "${wpf_dotnet}.exe" ]]; then
+  wpf_dotnet="${wpf_dotnet}.exe"
+elif [[ ! -x "${wpf_dotnet}" ]]; then
   wpf_dotnet="dotnet"
 fi
 
