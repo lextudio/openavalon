@@ -134,6 +134,15 @@ windows). `Console` output is lost from these WinExe apps — trace with
 in-window popup path and is a quick way to tell native-popup-surface bugs apart from
 general WPF ones.
 
+Driving a dropdown needs `cliclick m:<x>,<y>` to move into the popup, a short pause, and
+only then `cliclick c:<x>,<y>`: a bare click lands before the item has taken mouse-over
+and merely highlights it, which reads exactly like the selection bug it is used to test
+for. Measure item rows off a screenshot each time — the popup is positioned against the
+*selected* item, so the rows move once something is picked — and prefer the window title
+over the on-screen text as the oracle (the sample sets it from `SelectionChanged`),
+falling back to a screenshot when the accessibility query returns empty, which it does
+intermittently.
+
 ## Rebase run 2026-09-17 (branch `rebase-2026-09-17` in all three repos)
 
 Executed the dispositions above onto `upstream/progpu-rendering-port` @ `dca4e3360`.
