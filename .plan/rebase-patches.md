@@ -9,7 +9,7 @@ conflicts. Add an entry whenever a bug is traced back to one of our own patches.
 Full survey of our 32 commits vs `upstream/progpu-rendering-port` @ `dca4e3360`
 done 2026-09-15 (upstream was 1220 commits ahead).
 
-#### DROP — upstream has an equivalent; do not replay
+### DROP — upstream has an equivalent; do not replay
 
 | Our patch | Superseded by upstream |
 |---|---|
@@ -28,7 +28,7 @@ upstream. `887fbb473` is the dangerous one — detail below.
 calls, and that helper exists in neither tree today. Replay it only if you replay the
 commit that introduced the tracing; otherwise ignore.
 
-#### KEEP — genuinely absent upstream (verified by marker grep, not just file diff)
+### KEEP — genuinely absent upstream (verified by marker grep, not just file diff)
 
 | Our patch | Marker proving it is ours (upstream / HEAD hits) |
 |---|---|
@@ -133,6 +133,89 @@ windows). `Console` output is lost from these WinExe apps — trace with
 `File.AppendAllText` instead. `PROGPU_WPF_DISABLE_NATIVE_POPUPS=1` switches to the
 in-window popup path and is a quick way to tell native-popup-surface bugs apart from
 general WPF ones.
+
+## Rebase run 2026-09-17 (branch `rebase-2026-09-17` in all three repos)
+
+Executed the dispositions above onto `upstream/progpu-rendering-port` @ `dca4e3360`.
+The original branches were left untouched; nothing is merged back yet.
+
+| Repo | New base | Local patches after rebase |
+|---|---|---|
+| ProGPU | upstream pin `21c60978` | 2, both applied without conflict |
+| LibreWinForms | upstream pin `c5f459c7` | **0 — the fork is no longer needed** |
+| LibreWPF | upstream `dca4e3360` | 20 commits |
+
+Six conflicts, all in places where upstream and our patch added members at the same
+spot. `e9c64772d` needed a real decision (keep our
+`NativePointerCoordinatesAreOwnerRelative = false`, take upstream's newer
+`SharedRenderDeviceOwner` wiring); `37eab3c81`'s three hunks all went to upstream,
+whose rewrite of the Windows packaging script supersedes ours.
+
+`39e806e51` did reintroduce the duplicate `GetActiveWindow` as predicted, so
+`875fca8ab` was folded in. `e8fe64eeb` was replayed as the MSBuild half only.
+
+### LibreWinForms no longer needs a fork
+
+`a5bfb83f9 Fix designer control preview` targeted
+`src/LibreWinForms.Portable/.../WindowsFormsHost.cs`, which upstream deleted —
+`WindowsFormsHost` now lives in LibreWPF at
+`src/LibreWPF.WinFormsCompat/WindowsFormsIntegration/WindowsFormsHost.cs`, with a much
+richer `RenderControl` dispatcher that nonetheless had no branch for `TextBoxBase`,
+`GroupBox`, `NumericUpDown` or plain `Panel`. Those three render methods plus
+`DrawSpinnerArrow` port over unchanged (`DrawTextInBounds`, `MeasureText` and
+`DrawBorder` all exist in the new file); match `Panel` *after* `TabPage`, which derives
+from it. With that done, LibreWinForms pins straight to upstream.
+
+### Aligning with upstream requires building ProGPU natives locally
+
+Until the natives are built, the rebased stack builds and packs but does not run:
+
+```
+InvalidOperationException: Native text context creation failed with InvalidArgument.
+  at NativeTextShapingContext..ctor(fontData, faceIndex, normalizationData)
+```
+
+Upstream's ProGPU pin is ~1750 commits past `preview.55`, and its managed code needs a
+native ABI newer than **any published `ProGPU.Backend.Native`** (`preview.62` is the
+newest on nuget.org). So a tree aligned with upstream can only run against natives built
+from source: `external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64`,
+which needs **ninja** (cmake alone is not enough) — not installed on this machine.
+
+Staging the published `.62` runtimes into
+`external/ProGPU/artifacts/progpu-native/package/runtimes` is enough to *pack*
+`ProGPU.Backend.Native`, but not to run: the managed wrapper then binds to older native
+entry points. Note the pack step still errors out afterwards on
+"win-x64 ProGPU Direct2D COM provider has not been staged" — that fires after the
+package is written, so the artifact is usable.
+
+Building them (done 2026-09-17, ~10 min for 356 targets) needs two workarounds:
+`brew install ninja`, and ProGPU's own `global.json` pins SDK `10.0.201` with
+`rollForward: latestFeature`, which no installed SDK satisfies — temporarily set it to
+`latestMajor` and point `DOTNET_ROOT`/`PATH` at `LibreWPF/.dotnet` (`DOTNET_ROLL_FORWARD`
+does not help; it governs the runtime, not SDK resolution). Restore `global.json`
+afterwards. The script stages the result straight into
+`artifacts/progpu-native/package/runtimes/<rid>/native`, ready to repack.
+
+### Resolving conflicts in this fork
+
+Keeping both sides of a conflict is right for these patches — upstream and we genuinely
+add different members — but doing it mechanically **splits members apart** whenever the
+conflict boundary falls inside one: it cost a closing brace in
+`WpfPortablePresentationSourceBridge.TryCaretInteger` and interleaved two test methods in
+`WpfManagedProjectGraphTests.cs`. Neither showed up in `BuildManagedTransport`, which
+does not compile `ProGPU.Wpf.csproj` or the test project — build those two explicitly
+after resolving. For a huge assertion file like the graph tests, rebuild it from
+upstream's version and re-append our whole test methods (bounded by the `    }` at method
+indentation, not by brace matching — the assertions contain braces in string literals)
+rather than patching the interleaved result.
+
+### Verified on the rebased stack
+
+With natives built and every package repacked, mouse selection in a ComboBox dropdown
+works: Banana then Cherry both selected, `SelectionChanged` fired once each, window title
+tracked it. The dropdown also *renders* correctly again (white ground, border, hover
+highlight following the pointer) — the earlier broken popup rendering was the same
+missing hit-test reaching the popup surface.
 
 ## Current State
 
