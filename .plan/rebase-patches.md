@@ -60,8 +60,15 @@ Handling notes:
   are still ours. Replay just that half.
 - `e9c64772d` should be **re-verified after rebase** — upstream reworked the surrounding
   pointer normalization, so the correct value of that flag may differ on the new base.
-- `4c5a80208` touches `ProGPU.Wpf.Sdk.targets`, which upstream rewrote heavily; read that
-  file by hand rather than trusting a clean cherry-pick.
+- `4c5a80208` touches `ProGPU.Wpf.Sdk.targets`, which upstream rewrote heavily. Resolved
+  by hand: its two `_ProGpuWpfManagedTransportRuntimeRoot` hunks (ours 376/431) are
+  byte-identical to upstream's 377/430 — take upstream's and drop ours. What is genuinely
+  ours is the ref-assembly block at 98-107 (`_ProGpuWpfTransportReference` plus the
+  `System.Private.Windows.Core.dll` `Reference`, gated on
+  `ProGpuWpfUsePortableFrameworkReferences` and `ReferenceMode == Package`) along with the
+  `ProGpuWpfSdkPreferTransportReferences`,
+  `ProGpuWpfSdkRemoveWindowsDesktopSupportFacades` and
+  `PkgSystem_Configuration_ConfigurationManager` properties. Replay only those.
 - Submodule pins (`5313f8451`, `8b0438d25`, `6d8230516`) are re-decided by the rebase, and
   the six `Merge branch …` commits do not replay.
 
