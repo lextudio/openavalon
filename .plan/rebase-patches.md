@@ -1,5 +1,132 @@
 # Rebase LibreWinForms + ProGPU patches to latest NuGet.org versions
 
+## Patch disposition log (running)
+
+Patches found to be superseded by upstream or actively harmful. Check this list
+first when rebasing and drop the listed commits instead of re-resolving their
+conflicts. Add an entry whenever a bug is traced back to one of our own patches.
+
+Full survey of our 32 commits vs `upstream/progpu-rendering-port` @ `dca4e3360`
+done 2026-09-15 (upstream was 1220 commits ahead).
+
+#### DROP — upstream has an equivalent; do not replay
+
+| Our patch | Superseded by upstream |
+|---|---|
+| `f5ff2f208 Fix splitter dragging` | `b9586b7c7` same subject (our PR, merged) |
+| `50ca5220a Fix mouse up event` | `438f5b0ea` same subject (our PR, merged) |
+| `ebf544b5b Fix custom chrome issue` | `cad6e3dc6` same subject (our PR, merged) |
+| `03b98391b Implement GetDoubleClickTime on macOS` | `6ed47be06` same subject (our PR, merged) |
+| `618c15126 Add a setting to suppress runtime assets` | `32de2f566` same subject (our PR, merged) |
+| `887fbb473 Fix splitter drag` (MouseDevice.cs hunk) | `dc435adf1` — **and ours causes a regression**, see below |
+
+The first four were confirmed by `git cherry -v` (identical patch-id) plus a matching
+upstream subject; `618c15126` by marker `ProGpuWpfCopyPackageRuntimeAssets` present 4×
+upstream. `887fbb473` is the dangerous one — detail below.
+
+`52a559071 Remove debug calls` has no standalone effect: it deletes `TraceWindowMove`
+calls, and that helper exists in neither tree today. Replay it only if you replay the
+commit that introduced the tracing; otherwise ignore.
+
+#### KEEP — genuinely absent upstream (verified by marker grep, not just file diff)
+
+| Our patch | Marker proving it is ours (upstream / HEAD hits) |
+|---|---|
+| `45eed4cdd Add popup counter` | `s_wpfOpenPopupCount`, `HasAnyOpenPopupInWpf` — 0 / 3 |
+| `4c5a80208 Fix drag and drop and packaging` | `ProGpuWpfSdkPreferTransportReferences` — 0 / 1 |
+| `29af29191 Fix macOS crashes` | `PROGPU_LCID_EN_US`, `GetThreadLocale` shims — 0 / 1 |
+| `b768e5a63 Add cross platform workaround` | `ProGpuWpfScreenshot` — 0 / 2 (file absent upstream) |
+| `f910d0eb4 Fix image rendering bug` | `ScalePenThicknessToDeviceSpace` — 0 / 2 |
+| `73bf8a870 Add designer unhandled exception handler` | `TryReportInputExceptionToWindowDispatcher` — 0 / 2 |
+| `2f80ecee3 Improve handle exposure` | `TryGetNativeHandle` — 0 / 3 |
+| `19ccc0641 Fix build on Windows` | the three `*.ps1` files it edits do not exist upstream at all |
+| `39e806e51 Address macOS crashes` | `GetMonitorInfo` is still a `(void)`-stub upstream; ours implements it |
+| `e9c64772d Fix menu popup hover` | `NativePointerCoordinatesAreOwnerRelative`: upstream `OperatingSystem.IsMacOS()`, ours `false` |
+| `37eab3c81 Fix packaging` | `LibreWpfArchNeutralTransportAssemblies` — 0 / 2 |
+| `3565eb7a3 Fix portable pointer target handling` | `IsPortableHitTestVisible` — 0 / 4 |
+| `9894da059` / `acf4c8208` (graph tests) | assert on the markers above; keep with the patches they guard |
+
+Handling notes:
+
+- `875fca8ab Fix merge issue` only removes a duplicate `GetActiveWindow` that
+  `39e806e51` introduced — **squash it into `39e806e51`**; dropping it alone leaves the
+  C file uncompilable.
+- `45eed4cdd` (popup counter) and `Window.cs HandlePortableMove` are one feature: the
+  counter exists solely to suppress the capture-release that `HandlePortableMove` does.
+  Upstream has no `HandlePortableMove` at all. Keep both or drop both.
+- `e8fe64eeb Add more platform invoke calls` is **partial**: the
+  `SetWindowLongWrapper`/`SetWindowLongPtrWrapper` half is upstream (via
+  `383dba7cb`, our PR #105); only the MSBuild `libPresentationNative_cor3` copy rules
+  are still ours. Replay just that half.
+- `e9c64772d` should be **re-verified after rebase** — upstream reworked the surrounding
+  pointer normalization, so the correct value of that flag may differ on the new base.
+- `4c5a80208` touches `ProGPU.Wpf.Sdk.targets`, which upstream rewrote heavily; read that
+  file by hand rather than trusting a clean cherry-pick.
+- Submodule pins (`5313f8451`, `8b0438d25`, `6d8230516`) are re-decided by the rebase, and
+  the six `Merge branch …` commits do not replay.
+
+Method note: check divergence with `git diff --quiet <upstream> HEAD -- "$f"` per file
+**and** grep the patch's distinctive markers in both trees. A file-level diff alone proves
+nothing (upstream files differ for unrelated reasons), and a marker absent from *both*
+trees means our own later commit already removed it. Beware zsh: `for f in $files` does
+not word-split, so a naive loop silently checks one bogus path and reports "no diff" for
+everything — that produced a completely wrong first pass here.
+
+### Detail: `887fbb473 Fix splitter drag` — DROP the MouseDevice.cs hunk
+
+**Symptom it caused**: a ComboBox (or menu) dropdown could not be selected with the
+mouse on macOS — clicking an item just closed the dropdown and `SelectionChanged`
+never fired. Keyboard (arrow + Enter) still worked, because keyboard routing does
+not depend on `_mouseOver`.
+
+**Mechanism**: the patch added a blanket early-return to `MouseDevice.Synchronize()`:
+
+```csharp
+if (Captured != null) { return; }   // ours: skips for ANY capture
+```
+
+A ComboBox dropdown holds `CaptureMode.SubTree`, so this also suppressed the
+synthesized re-hit-test that popups rely on. Without it, `MouseDevice.PreNotifyInput`
+decides whether to re-hit-test purely from `!ArePointsClose(ptClient, _lastPosition)`.
+When the popup's own native window starts reporting input, `ptClient` is in *popup*
+client coordinates while `_lastPosition` was just overwritten with the same point by
+the source-switching Activate report — so `isGlobalChange` is false, the hit test is
+skipped, and `_mouseOver` stays pointing at the element under the mouse *before* the
+popup opened (the template's ToggleButton, in the owner window's tree). The click is
+delivered there, `ButtonBase.CaptureMouse()` steals the ComboBox's SubTree capture,
+and the dropdown toggles shut with no selection.
+
+**Upstream fix**: `dc435adf1 Keep popup subtree synchronization during portable drags`
+(Wiesław Šoltés, 2026-09-14) narrows the guard to element-captured pressed drags, which
+is what the splitter-drag patch actually needed:
+
+```csharp
+if (Captured != null &&
+    _captureMode == CaptureMode.Element &&
+    activeSource is PortablePresentationSource &&
+    (LeftButton == MouseButtonState.Pressed ||
+     MiddleButton == MouseButtonState.Pressed ||
+     RightButton == MouseButtonState.Pressed))
+{
+    return;
+}
+```
+
+Note `b9586b7c7 Fix splitter dragging` upstream is a *different*, Thumb.cs-only change —
+do not mistake it for this one.
+
+**Verified**: building our branch with only the upstream `Synchronize()` variant applied
+(and no other change) restored mouse selection — Banana then Cherry both selected, window
+title tracked `SelectionChanged`. So this is our own regression, not an upstream bug; no
+upstream PR is warranted.
+
+**Reproducing this class of bug**: minimal LibreWPF app with one ComboBox, driven with
+real clicks via `cliclick` (OS accessibility scripting does not work against these
+windows). `Console` output is lost from these WinExe apps — trace with
+`File.AppendAllText` instead. `PROGPU_WPF_DISABLE_NATIVE_POPUPS=1` switches to the
+in-window popup path and is a quick way to tell native-popup-surface bugs apart from
+general WPF ones.
+
 ## Current State
 
 ### LibreWinForms
