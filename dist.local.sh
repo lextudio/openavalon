@@ -10,9 +10,10 @@ winforms_root="${wpf_root}/external/LibreWinForms"
 
 local_feed="${DIST_LOCAL_FEED:-${repo_root}/artifacts/local-feed}"
 local_feed_name="${DIST_LOCAL_FEED_NAME:-openavalon-local}"
+target_platform="${DIST_LOCAL_TARGET_PLATFORM:-all}"
 
 dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.57}"
-progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.55}"
+progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.62}"
 
 wpf_dotnet="${wpf_root}/.dotnet/dotnet"
 if [[ ! -x "${wpf_dotnet}" && -x "${wpf_dotnet}.exe" ]]; then
@@ -22,6 +23,11 @@ elif [[ ! -x "${wpf_dotnet}" ]]; then
 fi
 
 mkdir -p "${local_feed}"
+
+if [[ "${target_platform}" != "all" && "${target_platform}" != "macos" ]]; then
+  echo "DIST_LOCAL_TARGET_PLATFORM must be 'macos' or 'all'." >&2
+  exit 1
+fi
 
 pack_wpf_project() {
   local project="$1"
@@ -40,7 +46,7 @@ pack_wpf_project() {
 
 echo "== Packing ProGPU packages =="
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
-PROGPU_PACKAGE_GROUP="${PROGPU_PACKAGE_GROUP:-portable}" \
+PROGPU_PACKAGE_GROUP="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}" \
   "${progpu_root}/eng/progpu-pack.sh"
 
 echo "== Packing the ProGPU projects LibreWPF.Sdk depends on =="
@@ -100,11 +106,27 @@ pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_pac
 pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}"
 
 echo "== Packing LibreWinForms packages =="
+if [[ "${target_platform}" == "macos" ]]; then
+  canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
+  rm -rf "${canonical_feed}"
+  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${canonical_feed}" \
+  PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
+    "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
+  canonical_commit="$(git -C "${winforms_root}" rev-parse HEAD)"
+  LIBREWINFORMS_CANONICAL_WFI_PACKAGE_SOURCE="${canonical_feed}" \
+  LIBREWINFORMS_CANONICAL_WFI_COMMIT="${canonical_commit}" \
+  LIBREWINFORMS_PACKAGE_OUTPUT="${local_feed}" \
+  LIBREWINFORMS_RESTORE_SOURCES="${local_feed};https://api.nuget.org/v3/index.json" \
+  LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
+  LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
+    "${winforms_root}/eng/librewinforms-pack.sh"
+else
 LIBREWINFORMS_PACKAGE_OUTPUT="${local_feed}" \
 LIBREWINFORMS_RESTORE_SOURCES="${local_feed};https://api.nuget.org/v3/index.json" \
 LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
 LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
   "${winforms_root}/eng/librewinforms-pack.sh"
+fi
 
 echo "== Registering local NuGet source '${local_feed_name}' =="
 if ! dotnet nuget list source | grep -Fq "${local_feed}"; then
