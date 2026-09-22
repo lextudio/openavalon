@@ -53,6 +53,102 @@ Before a build, update the superproject and initialize the pinned nested reposit
 canonical gate verifies that LibreWPF's LibreWinForms commit and LibreWinForms' ProGPU commit match;
 do not bypass those checks with an arbitrary external checkout.
 
+## Packing invariants `dist.local.sh` enforces
+
+The consuming repository documents the whole contract — one OpenDevelop payload serving both x64
+and ARM64, which assets belong in `lib/`, `ref/` and `runtimes/<rid>/`, the NuGet global-cache
+trap, and the steps for rebasing this fork onto upstream dotnet/wpf — in
+`OpenDevelop/doc/technotes/dual-architecture-packaging.md`. Read it before changing anything that
+packs an assembly.
+
+Each of these was a real failure that produced no error at the point it went wrong, so the guards
+matter more than the rules:
+
+- **Pack AnyCPU.** Everything `pack_wpf_project` produces carries its managed assemblies in a
+  RID-neutral `lib/<tfm>` folder. A hardcoded `-p:Platform=x64` shipped an x64 `ProGPU.Wpf.dll`
+  from an ARM64 workstation; the consumer then failed at startup with "Could not load file or
+  assembly 'ProGPU.Wpf' ... The system cannot find the file specified" for a file that was
+  present. The `Checking RID-neutral payload is AnyCPU` step at the end of the run lists any
+  `lib/**/*.dll` whose PE machine field is not `0x014C`. The genuinely architecture-specific
+  assemblies below are the documented exception and ship under `runtimes/<rid>/`.
+- **`lib/` was not the only folder making that promise.** The audit (now `Checking payload
+  architectures`) covers three, because the same `Platform=x64` build violated all three and only
+  one of them fails the way the rule above describes:
+  - `lib/<tfm>/` — AnyCPU only; a violation is a run-time load failure.
+  - `ref/<tfm>/` — AnyCPU only; a violation is a **compile-time** `CS8012: Referenced assembly 'X'
+    targets a different processor`. That is merely a warning in most projects, so an x64 `ref/`
+    tree looks harmless right up until it reaches one with `TreatWarningsAsErrors` — in
+    OpenDevelop, `AvalonDock.Themes.VS`, which it broke with four errors while nothing else in the
+    solution complained. It is latent too: projects already built against the previous package do
+    not recompile until something else invalidates them.
+  - `runtimes/<rid>/lib/<tfm>/` — AnyCPU or that RID's own architecture, never another's.
+    `StageLibreWpfRidManagedTransportPayload` duplicates ONE managed payload into all three RID
+    folders so a RID-less build gets a complete RID-filtered asset set; that is correct only while
+    the payload is AnyCPU.
+
+  Both were the same two gaps in the `LibreWpfArchNeutralTransportAssemblies` whitelist in
+  `eng/WpfArcadeSdk/Sdk/Sdk.props`, and both are now closed there rather than in the audit:
+  - The whitelist lists **implementation** assembly names, but the reference projects are
+    `src/Microsoft.DotNet.Wpf/src/*/ref/<name>-ref.csproj`, so `MSBuildProjectName` is
+    `WindowsBase-ref` and never matched. Reference assemblies are now AnyCPU unconditionally, by
+    the `-ref` suffix — a wider rule than the whitelist, resting on a different fact: a reference
+    assembly is compiled against and never loaded, so its machine field can only do harm.
+  - `Microsoft.Win32.SystemEvents` was simply missing from the whitelist. It is pure managed code
+    that ships in `lib/` and is duplicated into all three RID folders, so one stamp landed in
+    three places, two of which could not load it.
+
+  Keep the audit anyway: it reports rather than fails, and it is what turns the next such gap into
+  a line of output instead of a `CS8012` in one unrelated consumer project weeks later.
+- **The consumer SDK must prefer `runtimes/<rid>/` over `lib/`, in BOTH branches.**
+  `_ProGpuWpfSdkCopyManagedTransportRuntimeAssets` in `ProGPU.Wpf.Sdk.targets` runs after NuGet has
+  already placed the correct per-RID assets, so copying `lib/` wholesale silently overwrote them —
+  the arm64 `DirectWriteForwarder` copied first, the x64 one over it moments later, and the ARM64
+  test host then died on a file plainly present in `bin`. Two details made the fix look ineffective:
+  guarding it on `'$(RuntimeIdentifier)' == ''` skips exactly the branch that does the damage (real
+  consumer projects evaluate to `win-arm64`), and composing the per-RID root from
+  `PkgLibreWPF_Transport` or a package root yields an empty path in that target — the `lib/` root is
+  commonly reached through the `ref/`→`lib/` rewrite instead — so the preference silently does
+  nothing. Derive the sibling tree from whichever `lib/` root was actually resolved, and verify by
+  reading the PE machine of the DLL in the consumer's `bin`, after clearing
+  `~/.nuget/packages/librewpf.sdk/<version>`.
+
+  Do **not** reach for `PlatformTarget` as the architecture signal, even though it reads like the
+  obvious one. A project with `ProGpuWpfUseCurrentRuntimeIdentifier=true` derives its RID from the
+  architecture of the building process, so an x64 IDE on an ARM64 machine emits an x64 apphost
+  while `PlatformTarget` still evaluates to `arm64`; preferring it then pairs an arm64
+  `DirectWriteForwarder` with an x64 `.exe` - the same breakage, arrived at from the other side.
+- **Never copy anything out of `ref/` into an output folder.** A reference assembly has no method
+  bodies and the runtime refuses it outright (`BadImageFormatException: Reference assemblies cannot
+  be loaded for execution`), thrown from the bootstrap before any application code runs. This is
+  not hypothetical: the SDK's runtime roots are partly derived by rewriting a `ref/` path into a
+  `lib/` one, and when the anchor property arrives as `"<...>\ref\net10.0\X.dll;<...>\ref\net10.0"`
+  the semicolon makes MSBuild read the Include as two items, the first of which is a reference
+  assembly. A 96 KB `WindowsBase.dll` then replaces the 1 MB implementation in `bin`. Both the
+  copy target and the deps target now filter on the resolved path, so it cannot matter how an item
+  got there.
+- **AnyCPU is also required for the arch-neutral packages to pack at all.**
+  `packaging/Directory.Build.props` sets `IsPackable=false` when `$(Platform)` is an architecture
+  and `$(CreateArchNeutralPackage)` is true. With an architecture forced, `dotnet pack` skipped
+  `LibreWPF.Transport` and `LibreWPF.Sdk` silently **and still exited 0** - and since the old
+  `.nupkg` is deleted first, the feed lost both packages. `pack_wpf_project` now asserts the
+  artifact exists instead of trusting the exit code.
+- **Clear the transport staging tree before building it.** `LibreWPF.Transport` is zipped from
+  `artifacts/packaging/Release/LibreWPF.Transport`, and its own cleanup target excludes the
+  current TFM's folder, so the tree is additive. A stale `ProGPU.Wpf.Interop.dll` survived there
+  for two weeks and shipped next to a newer `PresentationFramework.dll` that called an interop API
+  it did not have.
+- **`librewinforms-pack.sh` gets its own output directory.** It rejects any package it does not
+  own ("Unexpected current-version package artifact"), so it cannot write straight to the shared
+  feed; it writes `artifacts/librewinforms-feed` and the result is copied into `local-feed`.
+- **`LIBREWINFORMS_CANONICAL_WFI_COMMIT` is LibreWPF's HEAD, not LibreWinForms'.**
+  WindowsFormsIntegration is built from the LibreWPF tree, so SourceLink records LibreWPF's
+  commit; `librewinforms-pack.sh` checks the LibreWinForms side separately against its own HEAD.
+
+The last two abort *after* deleting the packages they were about to republish, so a failure there
+leaves the feed missing `LibreWPF.Interop` and `LibreWinForms.WindowsFormsIntegration` and the
+next consumer restore fails with NU1101. Re-run the pack rather than investigating the NuGet
+source.
+
 ## Dual-architecture canonical WindowsFormsIntegration
 
 `LibreWinForms.WindowsFormsIntegration.dll` and several ProGPU bridge assemblies are

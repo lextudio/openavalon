@@ -73,6 +73,28 @@ pack_wpf_project() {
   local project="$1"
   local package_id="$2"
   local package_version="$3"
+  # Pack AnyCPU. These packages carry their managed assemblies in a RID-NEUTRAL
+  # lib/<tfm> folder, so stamping them for one architecture makes them unusable
+  # everywhere else: the CLR does not fall back to JIT for a wrong-architecture
+  # managed assembly, it simply fails the load. On an ARM64 workstation the old
+  # hardcoded "-p:Platform=x64" shipped an x64 ProGPU.Wpf.dll inside
+  # LibreWPF.ProGPU/lib/net10.0, and the consumer died at startup with
+  # "Could not load file or assembly 'ProGPU.Wpf' ... The system cannot find the
+  # file specified" - a message that names the assembly sitting right there on
+  # disk, which is what makes it so hard to read.
+  #
+  # AnyCPU is also what the bait-and-switch arch-neutral packages
+  # (LibreWPF.Transport, LibreWPF.Sdk) require: packaging/Directory.Build.props
+  # sets IsPackable=false when $(Platform) is an architecture and
+  # $(CreateArchNeutralPackage) is true, so a multi-architecture build emits them
+  # exactly once. Forcing an architecture turned `dotnet pack` into a silent
+  # no-op for those two - and because the previous .nupkg is deleted first, the
+  # feed simply lost them.
+  #
+  # Genuinely architecture-specific payload (the C++/CLI DirectWriteForwarder,
+  # PresentationCore) is NOT packed here; it ships under runtimes/<rid>/ and the
+  # consumer selects it per RID.
+  local pack_platform=AnyCPU
   rm -f \
     "${local_feed}/${package_id}.${package_version}.nupkg" \
     "${local_feed}/${package_id}.${package_version}.snupkg"
@@ -82,7 +104,14 @@ pack_wpf_project() {
     -v:minimal \
     -p:Version="${package_version}" \
     -p:PackageVersion="${package_version}" \
-    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=x64 -p:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
+    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform} -p:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
+  # A skipped pack target still exits 0, so the exit code alone cannot tell a
+  # real pack from one that produced nothing.  Verify the artifact instead.
+  if [[ ! -f "${local_feed}/${package_id}.${package_version}.nupkg" ]]; then
+    echo "pack produced no ${package_id}.${package_version}.nupkg from ${project}." >&2
+    echo "Check IsPackable/CreateArchNeutralPackage for Platform=${pack_platform}." >&2
+    exit 1
+  fi
 }
 
 echo "== Packing ProGPU packages =="
@@ -119,6 +148,50 @@ for pair in \
   pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}"
 done
 
+# The per-RID managed payload (runtimes/<rid>/lib/net10.0/{PresentationCore,DirectWriteForwarder})
+# does NOT come from the transport build: the ArchNeutral project copies it out of
+# artifacts/windows-managed-runtime, which only eng/progpu-wpf-windows-managed-runtime.ps1
+# produces. dist.local.sh used to consume that directory without ever regenerating it, so the
+# package shipped a two-week-old PresentationCore beside a freshly built PresentationFramework.
+# Sync-LibreWpfDevelopmentRuntime installs exactly those two per-RID files last, so the stale
+# PresentationCore won - and the app died on first text box with
+# "MissingMethodException: InputManager.get_UsesPortableInput()", an API the fresh
+# PresentationFramework expected and the stale PresentationCore did not have.
+if [[ "${target_platform}" == "windows" ]]; then
+  echo "== Producing the per-RID Windows managed runtime payload =="
+  pwsh -NoProfile -File "${wpf_root}/eng/progpu-wpf-windows-managed-runtime.ps1" -Configuration Release
+  # `pwsh -File` reports 0 even when the script dies on a terminating error, so `set -e` never
+  # fired: the script deleted the payload directory, threw on its first Join-Path, and the pack
+  # step then shipped whatever per-RID files happened to survive from an earlier run. Assert the
+  # artifacts this feed actually consumes instead of trusting the exit code - the same lesson as
+  # pack_wpf_project below.
+  # win-x86 is not produced or shipped; see the comment in the script and in the transport csproj.
+  for rid in win-x64 win-arm64; do
+    for dll in PresentationCore DirectWriteForwarder; do
+      staged="${wpf_root}/artifacts/windows-managed-runtime/${rid}/net10.0/${dll}.dll"
+      if [[ ! -f "${staged}" ]]; then
+        echo "The per-RID managed runtime payload is missing ${rid}/${dll}.dll." >&2
+        echo "progpu-wpf-windows-managed-runtime.ps1 did not complete; do not pack on top of this." >&2
+        exit 1
+      fi
+    done
+  done
+fi
+
+# LibreWPF.Transport is zipped from a staging tree, not from a project's build output, and that
+# tree is additive: RemoveStaleLibreWpfTransportPayload deliberately excludes the CURRENT target
+# framework's folder, so a file that once landed in lib/<tfm> and is no longer produced stays
+# there forever and keeps getting shipped. That is how the package came to carry a two-week-old
+# ProGPU.Wpf.Interop.dll next to a freshly built PresentationFramework.dll that called an interop
+# API the stale copy did not have - the consumer then died in
+# ProGpuWpfSdkPortableBootstrap.Initialize() with a MissingMethodException that reads like a
+# version-pin problem. Clear the staging tree so every pack starts from what this build produced.
+transport_staging="${wpf_root}/artifacts/packaging/Release/LibreWPF.Transport"
+if [[ -d "${transport_staging}" ]]; then
+  echo "== Clearing stale LibreWPF.Transport staging payload =="
+  rm -rf "${transport_staging}/lib" "${transport_staging}/ref"
+fi
+
 echo "== Building the LibreWPF managed transport and theme payload =="
 run_wpf_msbuild \
   "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
@@ -147,6 +220,26 @@ pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_pac
 pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}"
 
 echo "== Packing LibreWinForms packages =="
+# librewinforms-pack.sh validates that its output directory holds EXACTLY the LibreWinForms
+# preview bundle and nothing else ("Unexpected current-version package artifact: ..."), which is a
+# legitimate purity gate for a release bundle but incompatible with pointing it straight at the
+# shared dev feed - by this point local-feed also holds LibreWPF.Transport/ProGPU/Sdk. Give it a
+# private staging directory and publish the result into the shared feed afterwards.
+librewinforms_feed="${DIST_LOCAL_LIBREWINFORMS_FEED:-${repo_root}/artifacts/librewinforms-feed}"
+rm -rf "${librewinforms_feed}"
+mkdir -p "${librewinforms_feed}"
+
+publish_librewinforms_packages() {
+  shopt -s nullglob
+  local produced=("${librewinforms_feed}"/*.nupkg "${librewinforms_feed}"/*.snupkg)
+  shopt -u nullglob
+  if [[ "${#produced[@]}" -eq 0 ]]; then
+    echo "librewinforms-pack.sh produced no packages in ${librewinforms_feed}." >&2
+    exit 1
+  fi
+  cp -f "${produced[@]}" "${local_feed}/"
+}
+
 if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; then
   canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
   rm -rf "${canonical_feed}"
@@ -157,19 +250,142 @@ if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; t
   DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
   PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
     "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
-  canonical_commit="$(git -C "${winforms_root}" rev-parse HEAD)"
+  # WindowsFormsIntegration is built from the LibreWPF tree (it is the WPF<->WinForms bridge), so
+  # the canonical WFI package records LibreWPF's commit via SourceLink, and
+  # LIBREWINFORMS_CANONICAL_WFI_COMMIT is documented as "the exact LibreWPF source commit that
+  # produced canonical WFI". librewinforms-pack.sh checks the LibreWinForms side separately,
+  # against its own repo HEAD. Passing the LibreWinForms commit here failed that first check with
+  # "Canonical WFI package does not record expected LibreWPF commit ...".
+  canonical_commit="$(git -C "${wpf_root}" rev-parse HEAD)"
   LIBREWINFORMS_CANONICAL_WFI_PACKAGE_SOURCE="${canonical_feed}" \
   LIBREWINFORMS_CANONICAL_WFI_COMMIT="${canonical_commit}" \
-  LIBREWINFORMS_PACKAGE_OUTPUT="${local_feed}" \
+  LIBREWINFORMS_PACKAGE_OUTPUT="${librewinforms_feed}" \
   LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
   LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
     "${winforms_root}/eng/librewinforms-pack.sh"
+  publish_librewinforms_packages
 else
-LIBREWINFORMS_PACKAGE_OUTPUT="${local_feed}" \
+LIBREWINFORMS_PACKAGE_OUTPUT="${librewinforms_feed}" \
 LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
 LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
   "${winforms_root}/eng/librewinforms-pack.sh"
+publish_librewinforms_packages
 fi
+
+# A managed assembly must carry an architecture its consumer can actually load, and three folders
+# in these packages each have their own rule:
+#
+#   lib/<tfm>            RID-neutral, so AnyCPU only. The CLR fails the load outright for a
+#                        wrong-architecture assembly (no JIT fallback), and the resulting
+#                        "Could not load file or assembly 'X' ... cannot find the file specified"
+#                        names a file that is plainly present, so the cause is easy to miss.
+#   ref/<tfm>            Reference assemblies, compiled against rather than loaded. An
+#                        arch-stamped one does not fail at run time, it fails the BUILD with
+#                        "CS8012: Referenced assembly 'X' targets a different processor" - a
+#                        warning in most projects and therefore invisible, but an error wherever
+#                        TreatWarningsAsErrors is on. That is how an x64 ref/ tree silently broke
+#                        OpenDevelop's AvalonDock themes after a local feed rebuild.
+#   runtimes/<rid>/lib/  Per-RID, so AnyCPU or that RID's own architecture - never another's. The
+#                        packaging duplicates one managed payload into all three RID folders
+#                        (StageLibreWpfRidManagedTransportPayload), so an arch-stamped file in it
+#                        lands in two folders where it cannot load.
+#
+# The producing-side rule lives in LibreWPF/eng/WpfArcadeSdk/Sdk/Sdk.props, which forces
+# PlatformTarget=AnyCPU for the transport assemblies and, separately, for every *-ref.csproj.
+# Report rather than fail: the canonical WinForms graph still emits arm64
+# WindowsFormsIntegration/ProGPU.DirectX, which is a separate fix.
+echo "== Checking payload architectures =="
+probe_pe_machine() {
+  local file="$1" off
+  off="$(od -An -tu4 -j 60 -N 4 "${file}" 2>/dev/null | tr -d ' ')"
+  [[ "${off}" =~ ^[0-9]+$ ]] || return 1
+  od -An -tx2 -j $((off + 4)) -N 2 "${file}" 2>/dev/null | tr -d ' '
+}
+
+check_anycpu_payload() {
+  local scratch offenders=0 pkg entry tmp machine rid expected
+  scratch="$(mktemp -d)"
+  for pkg in "${local_feed}"/*.nupkg; do
+    [[ -e "${pkg}" ]] || continue
+    while IFS= read -r entry; do
+      [[ -n "${entry}" ]] || continue
+      tmp="${scratch}/probe.dll"
+      unzip -p "${pkg}" "${entry}" > "${tmp}" 2>/dev/null || continue
+      [[ -s "${tmp}" ]] || continue
+      machine="$(probe_pe_machine "${tmp}")" || continue
+      [[ -n "${machine}" ]] || continue
+      # 0x014c is both AnyCPU and x86, and is always acceptable.
+      [[ "${machine}" == "014c" ]] && continue
+      # DirectWriteForwarder is C++/CLI and therefore CANNOT be AnyCPU, yet it has to appear in
+      # lib/<tfm> as well so a RID-neutral restore resolves the reference at all. There is no
+      # version of this file that satisfies the lib/ rule, so flagging it forever would only
+      # train the reader to ignore this report. Consumers get the right one because
+      # ProGPU.Wpf.Sdk.targets prefers runtimes/<rid>/ over lib/ when copying the payload.
+      case "${entry}" in
+        lib/*/DirectWriteForwarder.dll) continue ;;
+      esac
+      case "${entry}" in
+        runtimes/*)
+          rid="${entry#runtimes/}"
+          rid="${rid%%/*}"
+          case "${rid}" in
+            win-x64)   expected="8664" ;;
+            win-arm64) expected="aa64" ;;
+            win-x86)   expected="014c" ;;
+            *)         expected="" ;;
+          esac
+          [[ -n "${expected}" && "${machine}" == "${expected}" ]] && continue
+          echo "  wrong-arch for ${rid}: $(basename "${pkg}") ${entry} (machine 0x${machine})" >&2
+          ;;
+        *)
+          echo "  arch-stamped: $(basename "${pkg}") ${entry} (machine 0x${machine})" >&2
+          ;;
+      esac
+      offenders=$((offenders + 1))
+    done < <(unzip -Z1 "${pkg}" 2>/dev/null |
+               grep -E '^(lib|ref)/[^/]+/.*\.dll$|^runtimes/[^/]+/lib/[^/]+/.*\.dll$')
+  done
+  rm -rf "${scratch}"
+  if [[ "${offenders}" -gt 0 ]]; then
+    echo "  ${offenders} assemblies carry an architecture their folder cannot promise; they will" >&2
+    echo "  fail to load, or fail the consumer's build with CS8012 where the entry is under ref/." >&2
+    echo "  See OpenDevelop doc/technotes/librewpf.md." >&2
+  else
+    echo "  lib/, ref/ and every runtimes/<rid>/lib/ entry carry a loadable architecture."
+  fi
+}
+check_anycpu_payload
+
+# NuGet never re-extracts a package whose id+version it already has, and this feed republishes the
+# same preview version every run. A corrected package therefore sits in the feed while every
+# consumer keeps compiling and running against the stale extracted copy under
+# ~/.nuget/packages/<id>/<version>/. That is not a corner case: it is how 25 packages came to serve
+# ARM64 assemblies to an x64 process for a full day, surviving several rounds of "fixed and
+# verified" because every check looked at the feed rather than the cache. Evict by timestamp - the
+# feed file is newer than the extraction directory exactly when the package was republished.
+echo "== Evicting stale NuGet cache entries for republished packages =="
+evict_stale_cache_entries() {
+  local nuget_root evicted=0 pkg base id ver cached
+  nuget_root="${NUGET_PACKAGES:-${HOME}/.nuget/packages}"
+  [[ -d "${nuget_root}" ]] || { echo "  no global package folder at ${nuget_root}."; return; }
+  for pkg in "${local_feed}"/*.nupkg; do
+    [[ -e "${pkg}" ]] || continue
+    base="$(basename "${pkg}" .nupkg)"
+    # "<Id>.<Version>" where the version starts at the first dot followed by a digit.
+    ver="$(sed -E 's/^.*\.([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$/\1/' <<<"${base}")"
+    id="${base%".${ver}"}"
+    [[ -n "${ver}" && "${id}" != "${base}" ]] || continue
+    cached="${nuget_root}/$(tr '[:upper:]' '[:lower:]' <<<"${id}")/${ver}"
+    [[ -d "${cached}" ]] || continue
+    if [[ "${cached}" -ot "${pkg}" ]]; then
+      rm -rf "${cached}"
+      echo "  evicted ${id}/${ver}"
+      evicted=$((evicted + 1))
+    fi
+  done
+  echo "  ${evicted} stale cache entr$([[ "${evicted}" == 1 ]] && echo y || echo ies) removed."
+}
+evict_stale_cache_entries
 
 echo "== Registering local NuGet source '${local_feed_name}' =="
 if ! dotnet nuget list source | grep -Fq "${local_feed}"; then
