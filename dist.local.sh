@@ -192,7 +192,24 @@ if [[ -d "${transport_staging}" ]]; then
   rm -rf "${transport_staging}/lib" "${transport_staging}/ref"
 fi
 
+canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
+
+build_canonical_winforms() {
+  rm -rf "${canonical_feed}"
+  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${canonical_feed}" \
+  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_VERSION="${dev_package_version}" \
+  PROGPU_WPF_CANONICAL_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
+  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-ARM64}" \
+  DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
+  PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
+    "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
+}
+
 echo "== Building the LibreWPF managed transport and theme payload =="
+# On macOS the canonical WinForms integration graph must run before the transport build.
+if [[ "${target_platform}" == "macos" ]]; then
+  build_canonical_winforms
+fi
 run_wpf_msbuild \
   "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
   -target:RestoreManagedTransport \
@@ -241,15 +258,9 @@ publish_librewinforms_packages() {
 }
 
 if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; then
-  canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
-  rm -rf "${canonical_feed}"
-  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${canonical_feed}" \
-  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_VERSION="${dev_package_version}" \
-  PROGPU_WPF_CANONICAL_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
-  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-ARM64}" \
-  DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
-  PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
-    "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
+  if [[ "${target_platform}" == "windows" ]]; then
+    build_canonical_winforms
+  fi
   # WindowsFormsIntegration is built from the LibreWPF tree (it is the WPF<->WinForms bridge), so
   # the canonical WFI package records LibreWPF's commit via SourceLink, and
   # LIBREWINFORMS_CANONICAL_WFI_COMMIT is documented as "the exact LibreWPF source commit that
