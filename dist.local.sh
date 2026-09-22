@@ -10,9 +10,15 @@ winforms_root="${wpf_root}/external/LibreWinForms"
 
 local_feed="${DIST_LOCAL_FEED:-${repo_root}/artifacts/local-feed}"
 local_feed_name="${DIST_LOCAL_FEED_NAME:-openavalon-local}"
-# This workstation prepares the Windows release feed by default.  The explicit
-# platform selector retains the upstream macOS and full cross-platform paths.
-target_platform="${DIST_LOCAL_TARGET_PLATFORM:-windows}"
+# The feed is built for the host: Git for Windows Bash prepares the Windows release feed
+# (win-x64 + win-arm64), macOS prepares the Apple silicon feed (osx-arm64). 'all' is the
+# upstream every-RID lane and needs natively staged binaries for every platform.
+case "$(uname -s)" in
+  Darwin) host_platform=macos ;;
+  MINGW*|MSYS*|CYGWIN*) host_platform=windows ;;
+  *) host_platform=all ;;
+esac
+target_platform="${DIST_LOCAL_TARGET_PLATFORM:-${host_platform}}"
 
 dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.57}"
 progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.62}"
@@ -56,6 +62,24 @@ if [[ "${target_platform}" == "windows" ]]; then
 else
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-0}"
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-false}"
+fi
+
+if [[ "${target_platform}" == "macos" ]]; then
+  if [[ "$(uname -m)" != "arm64" ]]; then
+    echo "The macOS feed targets Apple silicon (osx-arm64) only; run it on an arm64 Mac." >&2
+    exit 1
+  fi
+  # LibreWPF.Sdk links a small C shim. The default Command Line Tools SDK fails that link with
+  # "ld: tapi error: malformed file / unknown architecture", so pin a known-good SDK when the
+  # caller has not chosen one.
+  if [[ -z "${SDKROOT:-}" ]]; then
+    for candidate in MacOSX26.5.sdk MacOSX26.sdk; do
+      if [[ -d "/Library/Developer/CommandLineTools/SDKs/${candidate}" ]]; then
+        export SDKROOT="/Library/Developer/CommandLineTools/SDKs/${candidate}"
+        break
+      fi
+    done
+  fi
 fi
 
 run_wpf_msbuild() {
@@ -192,17 +216,34 @@ if [[ -d "${transport_staging}" ]]; then
   rm -rf "${transport_staging}/lib" "${transport_staging}/ref"
 fi
 
+# canonical_feed is the one librewinforms-pack.sh qualifies against. On Windows it is the ARM64
+# slice, and the x64 peer is built beside it: WindowsFormsIntegration is C++/CLI, and OpenDevelop's
+# patch-librewinforms-deps.ps1 takes both feeds (-WindowsArm64PackageRoot / -WindowsX64PackageRoot)
+# to fill runtimes/win-arm64 and runtimes/win-x64. On macOS the graph is built without a platform
+# (portable AnyCPU managed code, which runs natively on Apple silicon).
 canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
+canonical_feed_x64="${DIST_LOCAL_CANONICAL_WINFORMS_FEED_X64:-${repo_root}/artifacts/canonical-winforms-feed-x64}"
 
-build_canonical_winforms() {
-  rm -rf "${canonical_feed}"
-  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${canonical_feed}" \
+build_canonical_winforms_slice() {
+  local output="$1" platform="$2"
+  rm -rf "${output}"
+  PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${output}" \
   PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_VERSION="${dev_package_version}" \
   PROGPU_WPF_CANONICAL_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
-  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-$([[ "${target_platform}" == "windows" ]] && echo ARM64)}" \
+  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${platform}" \
   DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
   PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
     "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
+}
+
+build_canonical_winforms() {
+  if [[ "${target_platform}" == "windows" ]]; then
+    # x64 first so the ARM64 slice, which the rest of this run consumes, is built last.
+    build_canonical_winforms_slice "${canonical_feed_x64}" x64
+    build_canonical_winforms_slice "${canonical_feed}" ARM64
+  else
+    build_canonical_winforms_slice "${canonical_feed}" "${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-}"
+  fi
 }
 
 echo "== Building the LibreWPF managed transport and theme payload =="
