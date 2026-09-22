@@ -199,7 +199,7 @@ build_canonical_winforms() {
   PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${canonical_feed}" \
   PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_VERSION="${dev_package_version}" \
   PROGPU_WPF_CANONICAL_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
-  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-ARM64}" \
+  PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM="${PROGPU_WPF_CANONICAL_WINFORMS_PLATFORM:-$([[ "${target_platform}" == "windows" ]] && echo ARM64)}" \
   DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
   PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
     "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
