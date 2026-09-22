@@ -138,6 +138,32 @@ pack_wpf_project() {
   fi
 }
 
+# ProGPU.Backend.Native packages the platform-native renderer rather than building it as a
+# side effect of `dotnet pack`.  The package project validates the staged payload before Pack,
+# so prepare both Windows slices first.  Keeping this here (before progpu-pack.sh) makes the
+# local-feed lane self-contained and prevents a clean checkout from silently depending on an
+# earlier developer build's artifacts/progpu-native tree.
+if [[ "${target_platform}" == "windows" ]]; then
+  echo "== Staging ProGPU native Windows runtimes =="
+  for rid in win-x64 win-arm64; do
+    # The Windows native builder uses a RID-fixed CMake build directory.  It may
+    # retain a compiler choice from an interactive ClangCL attempt; this feed
+    # explicitly uses the installed MSVC toolchain, so do not reuse that cache.
+    rm -rf "${progpu_root}/artifacts/progpu-native/build-${rid}"
+    pwsh -NoProfile -File "${progpu_root}/eng/build-progpu-native-windows.ps1" \
+      -Rid "${rid}" \
+      -Compiler MSVC \
+      -BuildOnly
+    for native_dll in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
+      staged="${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/${native_dll}"
+      if [[ ! -s "${staged}" ]]; then
+        echo "The ProGPU native staging step did not produce ${rid}/${native_dll}." >&2
+        exit 1
+      fi
+    done
+  done
+fi
+
 echo "== Packing ProGPU packages =="
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
 PROGPU_PACKAGE_GROUP="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}" \
