@@ -20,8 +20,19 @@ case "$(uname -s)" in
 esac
 target_platform="${DIST_LOCAL_TARGET_PLATFORM:-${host_platform}}"
 
+# The feed publishes what the producing sources are at now.  Consumers such as OpenDevelop pin
+# their own (possibly older) versions independently; never lower these to match a consumer.
+# Earlier versions already in the feed are left in place, so older pins keep restoring.
+# ProGPU declares its own version; read it rather than repeating it here.
+progpu_source_props="${progpu_root}/Directory.Build.props"
+progpu_source_version="$(sed -nE 's#.*<VersionPrefix[^>]*>([^<]+)</VersionPrefix>.*#\1#p' "${progpu_source_props}" | head -1)-$(sed -nE 's#.*<VersionSuffix[^>]*>([^<]+)</VersionSuffix>.*#\1#p' "${progpu_source_props}" | head -1)"
 dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.57}"
-progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-0.1.0-preview.62}"
+progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-${progpu_source_version}}"
+if [[ ! "${progpu_package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+  echo "Could not determine the ProGPU package version from ${progpu_source_props}." >&2
+  exit 1
+fi
+echo "== Package versions: LibreWPF/LibreWinForms ${dev_package_version}, ProGPU ${progpu_package_version} =="
 
 wpf_dotnet="${wpf_root}/.dotnet/dotnet"
 if [[ ! -x "${wpf_dotnet}" && -x "${wpf_dotnet}.exe" ]]; then
@@ -97,6 +108,8 @@ pack_wpf_project() {
   local project="$1"
   local package_id="$2"
   local package_version="$3"
+  shift 3
+  # Remaining arguments are extra MSBuild properties for this one pack.
   # Pack AnyCPU. These packages carry their managed assemblies in a RID-NEUTRAL
   # lib/<tfm> folder, so stamping them for one architecture makes them unusable
   # everywhere else: the CLR does not fall back to JIT for a wrong-architecture
@@ -128,6 +141,7 @@ pack_wpf_project() {
     -v:minimal \
     -p:Version="${package_version}" \
     -p:PackageVersion="${package_version}" \
+    "$@" \
     $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform} -p:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
   # A skipped pack target still exits 0, so the exit code alone cannot tell a
   # real pack from one that produced nothing.  Verify the artifact instead.
@@ -162,9 +176,79 @@ if [[ "${target_platform}" == "windows" ]]; then
       fi
     done
   done
+
+  # ProGPU.Backend.Dx12 carries a separately-built WGPU/DXC runtime.  Its
+  # production builder verifies the pinned Rust dependency, signed compiler
+  # package, binary hashes, PE architecture, and provenance receipts before
+  # staging.  An ARM64 host needs an x64 PowerShell/Rust toolchain for the x64
+  # slice; accept those explicitly rather than silently building a host slice.
+  #
+  # Git for Windows Bash is an x64 process, so under emulation on an ARM64 host
+  # its PROCESSOR_ARCHITECTURE reads AMD64.  Ask the registry for the native one.
+  host_native_arch="$(MSYS2_ARG_CONV_EXCL='*' reg query \
+    'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' \
+    /v PROCESSOR_ARCHITECTURE 2>/dev/null | awk '/PROCESSOR_ARCHITECTURE/ { print $NF }')"
+  # Toolchains isolated under artifacts/tools/{pwsh-x64,rustup-<arch>} are used
+  # when present and no explicit override is given.
+  tools_root="${repo_root}/artifacts/tools"
+  echo "== Staging ProGPU DX12 Windows runtimes (host ${host_native_arch:-unknown}) =="
+  for rid in win-x64 win-arm64; do
+    arch="${rid#win-}"
+    arch_upper="$(tr '[:lower:]' '[:upper:]' <<<"${arch}")"
+    tool_rustup="${tools_root}/rustup-${arch}"
+    dx12_pwsh_var="PROGPU_WPF_${arch_upper}_PWSH"
+    rustup_bin_var="PROGPU_WPF_${arch_upper}_RUSTUP_BIN"
+    rustup_home_var="PROGPU_WPF_${arch_upper}_RUSTUP_HOME"
+    cargo_home_var="PROGPU_WPF_${arch_upper}_CARGO_HOME"
+    dx12_pwsh="${!dx12_pwsh_var:-pwsh}"
+    if [[ "${rid}" == "win-x64" && "${host_native_arch}" == "ARM64" && -z "${!dx12_pwsh_var:-}" ]]; then
+      dx12_pwsh="${tools_root}/pwsh-x64/runtime/pwsh.exe"
+      if [[ ! -x "${dx12_pwsh}" ]]; then
+        echo "win-x64 DX12 staging on ARM64 needs an x64 pwsh: set ${dx12_pwsh_var} or install one at ${dx12_pwsh}." >&2
+        exit 1
+      fi
+    fi
+    rustup_bin="${!rustup_bin_var:-}"
+    rustup_home="${!rustup_home_var:-${RUSTUP_HOME:-}}"
+    cargo_home="${!cargo_home_var:-${CARGO_HOME:-}}"
+    if [[ -z "${rustup_bin}" && -x "${tool_rustup}/cargo-home/bin/rustup.exe" ]]; then
+      rustup_bin="${tool_rustup}/cargo-home/bin"
+      rustup_home="${!rustup_home_var:-${tool_rustup}/rustup-home}"
+      cargo_home="${!cargo_home_var:-${tool_rustup}/cargo-home}"
+    fi
+    if [[ -z "${rustup_bin}" ]] && ! command -v rustup >/dev/null 2>&1; then
+      echo "DX12 ${rid} staging needs rustup: set ${rustup_bin_var} or install one under ${tool_rustup}." >&2
+      exit 1
+    fi
+    # PATH is translated for native children by MSYS; the other two are not.
+    dx12_environment=("PATH=${rustup_bin:+$(cygpath -u "${rustup_bin}"):}${PATH}")
+    [[ -n "${rustup_home}" ]] && dx12_environment+=("RUSTUP_HOME=$(cygpath -w "${rustup_home}")")
+    [[ -n "${cargo_home}" ]] && dx12_environment+=("CARGO_HOME=$(cygpath -w "${cargo_home}")")
+    dx12_staged="${progpu_root}/artifacts/progpu-dx12/package/${rid}/native"
+    # Every stage refuses an existing output directory ("must be a new directory"), so clear
+    # them all.  download/ (pinned archives) and artifacts/wgpu-native-windows (the cargo
+    # target) are caches the builder verifies, and keep a rerun incremental.
+    for dx12_output in libclang dependency compiler package; do
+      rm -rf "${progpu_root}/artifacts/progpu-dx12/${dx12_output}/${rid}"
+    done
+    env "${dx12_environment[@]}" \
+      "${dx12_pwsh}" -NoProfile -File "${progpu_root}/eng/build-progpu-dx12-runtime-windows.ps1" -Rid "${rid}"
+    # Same lesson as the managed runtime step below: do not trust pwsh's exit code alone.
+    for dx12_file in wgpu_native.dll dxcompiler.dll dxil.dll progpu-dx12-runtime.json; do
+      if [[ ! -s "${dx12_staged}/${dx12_file}" ]]; then
+        echo "The ProGPU DX12 staging step did not produce ${rid}/${dx12_file}." >&2
+        exit 1
+      fi
+    done
+    if ! grep -Fq "\"rid\": \"${rid}\"" "${dx12_staged}/progpu-dx12-runtime.json"; then
+      echo "The staged DX12 runtime receipt for ${rid} names a different RID." >&2
+      exit 1
+    fi
+  done
 fi
 
 echo "== Packing ProGPU packages =="
+PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
 PROGPU_PACKAGE_GROUP="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}" \
   "${progpu_root}/eng/progpu-pack.sh"
@@ -195,7 +279,9 @@ for pair in \
 ; do
   project="${pair%%:*}"
   package_id="${pair##*:}"
-  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}"
+  # These overwrite the verified progpu-pack.sh output of the same id and version, so pin the
+  # PE machine field the same way progpu-pack.sh does: Platform alone does not stamp it.
+  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}" -p:PlatformTarget=AnyCPU
 done
 
 # The per-RID managed payload (runtimes/<rid>/lib/net10.0/{PresentationCore,DirectWriteForwarder})
@@ -301,7 +387,10 @@ run_wpf_msbuild \
 echo "== Packing LibreWPF transport, ProGPU bridge, and SDK =="
 pack_wpf_project "packaging/Microsoft.DotNet.Wpf.GitHub/Microsoft.DotNet.Wpf.GitHub.ArchNeutral.csproj" "LibreWPF.Transport" "${dev_package_version}"
 pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_package_version}"
-pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}"
+# The SDK records which ProGPU version its consumers restore; keep it in step with this feed
+# instead of the default hard-coded in the SDK project.
+pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}" \
+  -p:ProGpuPackageVersion="${progpu_package_version}"
 
 echo "== Packing LibreWinForms packages =="
 # librewinforms-pack.sh validates that its output directory holds EXACTLY the LibreWinForms
