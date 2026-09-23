@@ -555,7 +555,11 @@ evict_stale_cache_entries() {
 evict_stale_cache_entries
 
 echo "== Registering local NuGet source '${local_feed_name}' =="
-if ! dotnet nuget list source | grep -Fq "${local_feed}"; then
+# dotnet prints the registered path in Windows form on Windows; compare both spellings.
+local_feed_native="${local_feed}"
+command -v cygpath >/dev/null 2>&1 && local_feed_native="$(cygpath -w "${local_feed}")"
+registered_sources="$(dotnet nuget list source)"
+if ! grep -Fqi -e "${local_feed}" -e "${local_feed_native}" <<<"${registered_sources}"; then
   dotnet nuget add source "${local_feed}" --name "${local_feed_name}"
 else
   echo "Source already registered."
