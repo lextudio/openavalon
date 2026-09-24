@@ -22,10 +22,14 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
   canonical WFI to have been built from LibreWinForms' current HEAD. When ProGPU changes, advance
   it in both places; do not commit into a nested repository while a feed build is running, or
   the last step fails with "Canonical WFI was not qualified against LibreWinForms commit ...".
-- The aligned versions used by OpenDevelop are `PROGPU_WPF_DEV_PACKAGE_VERSION=0.1.0-preview.57`
-  and `PROGPU_WPF_PROGPU_PACKAGE_VERSION=0.1.0-preview.62`. Change them as one coherent package
-  graph, never one package at a time, and republish over the same version rather than inventing a
-  side version.
+- Versions: LibreWPF/LibreWinForms use `PROGPU_WPF_DEV_PACKAGE_VERSION` (default
+  `0.1.0-preview.57`); ProGPU's version is read from `ProGPU/Directory.Build.props`
+  (`VersionPrefix`-`VersionSuffix`) unless `PROGPU_WPF_PROGPU_PACKAGE_VERSION` overrides it. The
+  run prints both first (`== Package versions: ... ==`). The feed publishes what the sources are
+  now; never lower a version to match a consumer's pin — earlier versions already in the feed stay
+  in place so older pins keep restoring. `LibreWPF.Sdk` is packed with
+  `ProGpuPackageVersion=<ProGPU version>` so its consumers restore the ProGPU packages this feed
+  just produced. Republish over the same version rather than inventing a side version.
 - Scripts must run under macOS's stock bash 3.2 as well as Git for Windows Bash (bash 5): no
   associative arrays (`declare -A`), `mapfile`, or `${var,,}`.
 - The canonical integration script disables the pinned ApiCompat checks
@@ -63,8 +67,31 @@ causes excessive concurrent C++ compiler memory use.
 
 The Windows lane sets `PROGPU_PACKAGE_WINDOWS_ONLY=1` and `ProGpuNativePackageWindowsOnly=true`;
 it validates and ships the `win-x64` and `win-arm64` native payloads (including Direct2D) and must
-not claim Linux/macOS assets exist. It also regenerates the per-RID managed runtime payload with
+not claim Linux/macOS assets exist. Before packing ProGPU it builds those payloads itself, so a
+clean checkout does not depend on an earlier developer build's `artifacts/` tree:
+
+- **Native renderer** — `ProGPU/eng/build-progpu-native-windows.ps1 -Rid <rid> -Compiler MSVC
+  -BuildOnly` for each RID, after deleting `artifacts/progpu-native/build-<rid>` (a cached ClangCL
+  choice from an interactive attempt must not be reused). Asserts `progpu_native.dll`,
+  `progpu_native_dawn.dll` and `progpu_native_direct2d.dll` were staged.
+- **DX12 runtime** — `ProGPU/eng/build-progpu-dx12-runtime-windows.ps1 -Rid <rid>`, which verifies
+  the pinned Rust dependency, signed compiler package, hashes, PE architecture and provenance
+  receipts. Each stage refuses an existing output directory, so the script clears
+  `artifacts/progpu-dx12/{libclang,dependency,compiler,package}/<rid>`; `download/` and
+  `artifacts/wgpu-native-windows` are verified caches and are kept. Asserts `wgpu_native.dll`,
+  `dxcompiler.dll`, `dxil.dll` and a `progpu-dx12-runtime.json` receipt naming the same RID.
+- **Cross-architecture toolchains** — each slice needs a PowerShell and a rustup of its own
+  architecture. The host architecture is read from the registry, because Git for Windows Bash is
+  an x64 process and reports `AMD64` under emulation on an ARM64 machine. On an ARM64 host the x64
+  slice needs an x64 `pwsh`: `PROGPU_WPF_X64_PWSH`, else `artifacts/tools/pwsh-x64/runtime/pwsh.exe`.
+  rustup comes from `PROGPU_WPF_<X64|ARM64>_RUSTUP_BIN` (with `..._RUSTUP_HOME` /
+  `..._CARGO_HOME`), else `artifacts/tools/rustup-<arch>/{cargo-home,rustup-home}`, else `rustup`
+  on `PATH`.
+
+It then regenerates the per-RID managed runtime payload with
 `eng/progpu-wpf-windows-managed-runtime.ps1` and builds both canonical WinForms slices (below).
+Every one of these PowerShell steps is followed by an artifact check, because `pwsh -File` can
+exit 0 after a terminating error.
 
 ## macOS lane
 
