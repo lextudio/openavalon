@@ -103,6 +103,22 @@ exit 0 after a terminating error.
   (`PROGPU_PACKAGE_GROUP=opendevelop-macos`); Windows-only Direct2D is intentionally not staged,
   so that lane packs `ProGPU.Backend.Native` with `ProGpuNativeSkipRuntimeValidation=true`.
   `ProGPU.Backend.Dawn` is part of the closure because `ProGPU.Backend.Native` depends on it.
+- **This lane reuses the staged native payload; it does not build it.** Unlike the Windows lane,
+  which builds both native slices before packing, macOS packs whatever already sits in
+  `external/ProGPU/artifacts/progpu-native/package/runtimes/osx-arm64/native`. Combined with
+  `ProGpuNativeSkipRuntimeValidation=true` that means a **stale `libprogpu_native.dylib` packs
+  and publishes cleanly** and only fails at runtime, as
+  `EntryPointNotFoundException: Unable to find an entry point named '...' in shared library
+  'progpu_native'` when managed code calls a native export added since the payload was built.
+  Nothing in the managed build or the pack step notices, because the managed side compiles
+  against the current header while the dylib is older.
+  `dist.local.sh` therefore verifies the staged payload's exported-symbol allowlist against
+  `external/ProGPU/eng/progpu-native-exports.txt` (via `eng/progpu-verify-native-exports.sh`)
+  before packing, and aborts with the rebuild command if it does not match. **Rebuild the
+  payload when the ProGPU native sources change**:
+  `external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64`. Do not silence a
+  failing check by repacking; the allowlist is the contract between the managed and native
+  sides. `--build-only` deliberately skips that same verification, so it cannot stand in for it.
 - Managed code is built **without a platform**. Do not export `Platform=x64`/`ARM64` on macOS: it
   leaks into the ProGPU project graph, whose `obj/<platform>/` reference assemblies are then never
   produced (`CS0006: Metadata file '.../ProGPU.WinRT/obj/x64/...' could not be found`). macOS has

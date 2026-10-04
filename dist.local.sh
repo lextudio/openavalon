@@ -247,6 +247,34 @@ if [[ "${target_platform}" == "windows" ]]; then
   done
 fi
 
+# The feed accumulates versions on purpose so older pins keep restoring, but a re-run of the
+# same version must not trip the package-group verifier: progpu-verify-packages.sh scans the
+# output directory for artifacts of the version being built and rejects any package the
+# selected group does not own, so packages left behind by an earlier run of the same version
+# look like unexpected output and abort the build. Clear the version being published so each
+# run starts from a clean slate for it. Other versions stay in place.
+echo "== Clearing ${progpu_package_version} packages from the local feed =="
+rm -f "${local_feed}"/*."${progpu_package_version}".nupkg "${local_feed}"/*."${progpu_package_version}".snupkg
+rm -f "${local_feed}"/*."${dev_package_version}".nupkg "${local_feed}"/*."${dev_package_version}".snupkg
+
+# The macOS lane does not build the ProGPU native renderer; it reuses whatever sits in
+# artifacts/progpu-native/package/runtimes/osx-arm64/native and passes
+# ProGpuNativeSkipRuntimeValidation=true when packing ProGPU.Backend.Native. Nothing above
+# proves that payload matches the managed code, so a stale dylib packs and publishes
+# cleanly and fails only at runtime, as an EntryPointNotFoundException from a managed call
+# into a native export that was added since the payload was built. Verify the exported
+# symbol allowlist before packing so the mismatch stops here instead.
+if [[ "${target_platform}" == "macos" ]]; then
+  native_dir="${progpu_root}/artifacts/progpu-native/package/runtimes/osx-arm64/native"
+  if [[ ! -s "${native_dir}/libprogpu_native.dylib" ]]; then
+    echo "The ProGPU osx-arm64 native payload is missing: ${native_dir}/libprogpu_native.dylib" >&2
+    echo "Build it first: ${progpu_root}/eng/build-progpu-native.sh --build-only --rid osx-arm64" >&2
+    exit 1
+  fi
+  PROGPU_NATIVE_BUILD_DIR="${native_dir}" \
+    "${progpu_root}/eng/progpu-verify-native-exports.sh"
+fi
+
 echo "== Packing ProGPU packages =="
 PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
