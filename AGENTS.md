@@ -22,12 +22,11 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
   canonical WFI to have been built from LibreWinForms' current HEAD. When ProGPU changes, advance
   it in both places; do not commit into a nested repository while a feed build is running, or
   the last step fails with "Canonical WFI was not qualified against LibreWinForms commit ...".
-- Versions: LibreWPF/LibreWinForms use `PROGPU_WPF_DEV_PACKAGE_VERSION` (default
-  `0.1.0-preview.57`); ProGPU's version is read from `ProGPU/Directory.Build.props`
-  (`VersionPrefix`-`VersionSuffix`) unless `PROGPU_WPF_PROGPU_PACKAGE_VERSION` overrides it. The
-  run prints both first (`== Package versions: ... ==`). The feed publishes what the sources are
-  now; never lower a version to match a consumer's pin — earlier versions already in the feed stay
-  in place so older pins keep restoring. `LibreWPF.Sdk` is packed with
+- Versions: hard-coded at the top of `dist.local.sh` (`dev_package_version`,
+  `progpu_package_version`), both matching the newest release on nuget.org (currently
+  `0.1.0-preview.65`); update both when nuget.org moves on. The run prints them first
+  (`== Package versions: ... ==`). Never lower a version to match a consumer's pin — earlier
+  versions already in the feed stay in place so older pins keep restoring. `LibreWPF.Sdk` is packed with
   `ProGpuPackageVersion=<ProGPU version>` so its consumers restore the ProGPU packages this feed
   just produced. Republish over the same version rather than inventing a side version.
 - Scripts must run under macOS's stock bash 3.2 as well as Git for Windows Bash (bash 5): no
@@ -39,6 +38,42 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
 - MSBuild `Exec` commands that pass paths must use `/`, never `\`: on macOS the shell eats the
   backslashes (`MS\Internal\IO\...` became `MSInternalIO...` in WindowsBase's string-table
   generator). This only shows up on a clean intermediate directory, so incremental builds hide it.
+
+## Incremental runs and the inner loop
+
+`dist.local.sh` skips every expensive stage whose inputs are unchanged since its last successful
+run. Each stage writes a receipt to `artifacts/dist-receipts/<stage>.receipt`: a fingerprint of its
+inputs, then the files it produced. A stage is skipped only when the fingerprint matches **and**
+every recorded file still exists; its receipt is deleted before it runs, so a failed run never
+leaves a matching one. Fingerprints are git state (HEAD tree, uncommitted diff, untracked file
+contents) plus content hashes of the staged native payloads, never timestamps.
+
+| Stage | Rebuilt when this changes |
+|---|---|
+| `native-<rid>` (Windows) | ProGPU `src/ProGPU.Native`, its builder script, export list, wgpu pin |
+| `dx12-<rid>` (Windows) | ProGPU `eng/wgpu-dxc` pins and the DX12 staging scripts, toolchain choice |
+| `progpu-packages` | anything in ProGPU, the staged native payloads, the versions |
+| `canonical-winforms-<platform>` | anything in LibreWPF, LibreWinForms or ProGPU, the versions |
+| `librewinforms` | LibreWinForms, ProGPU, the canonical slices, LibreWPF's commit, the versions |
+
+The LibreWPF transport build and its three packs always run; they are the part a LibreWPF change
+needs. `--force` (or `DIST_LOCAL_FORCE=1`) ignores every receipt. Deleting one receipt rebuilds just
+that stage.
+
+The feed is changed only by moving a published file aside first (`artifacts/local-feed-backup`).
+If the run fails, the trap removes every package the run wrote and restores the previous files, so
+a failed run leaves the feed as it was - it no longer loses the version being republished.
+
+For a one-assembly change, do not go through the feed at all while iterating:
+
+```bash
+./dev-overlay.sh ../OpenDevelop/src/Main/SharpDevelop/bin/Debug/net10.0-windows PresentationCore
+./dev-overlay.sh --restore ../OpenDevelop/src/Main/SharpDevelop/bin/Debug/net10.0-windows
+```
+
+It builds the named LibreWPF project, refuses a file the consumer does not already have or a
+different PE architecture, and keeps the original for `--restore`. A consumer rebuild from the
+feed also replaces it. Publish with `dist.local.sh` once the change is right.
 
 ## Windows lane
 
@@ -58,8 +93,11 @@ C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Microsoft/VC/v180
 ```
 
 `dist.local.sh` sets `VCTargetsPath`, uses VS MSBuild for LibreWPF validation graphs, supplies the
-required `ijwhost.dll`, and sets `CL=/MP1`. Keep `/MP1`: the native `System.Printing` PCH otherwise
-causes excessive concurrent C++ compiler memory use.
+required `ijwhost.dll`, and sets `CL=/MP1`. No LibreWPF C++ project enables `/MP`, so `/MP1` is
+only a guard; what actually serializes the native build is `run_wpf_msbuild`'s single MSBuild node,
+kept because concurrent native projects exhausted memory around the `System.Printing` PCH.
+`DIST_LOCAL_WINDOWS_MSBUILD_NODES=<n>` raises it on a workstation with memory to spare (not yet
+measured).
 
 ```bash
 "C:/Program Files/Git/bin/bash.exe" ./dist.local.sh

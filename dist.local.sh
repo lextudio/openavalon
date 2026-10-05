@@ -20,18 +20,26 @@ case "$(uname -s)" in
 esac
 target_platform="${DIST_LOCAL_TARGET_PLATFORM:-${host_platform}}"
 
-# The feed publishes what the producing sources are at now.  Consumers such as OpenDevelop pin
-# their own (possibly older) versions independently; never lower these to match a consumer.
-# Earlier versions already in the feed are left in place, so older pins keep restoring.
-# ProGPU declares its own version; read it rather than repeating it here.
-progpu_source_props="${progpu_root}/Directory.Build.props"
-progpu_source_version="$(sed -nE 's#.*<VersionPrefix[^>]*>([^<]+)</VersionPrefix>.*#\1#p' "${progpu_source_props}" | head -1)-$(sed -nE 's#.*<VersionSuffix[^>]*>([^<]+)</VersionSuffix>.*#\1#p' "${progpu_source_props}" | head -1)"
-dev_package_version="${PROGPU_WPF_DEV_PACKAGE_VERSION:-0.1.0-preview.57}"
-progpu_package_version="${PROGPU_WPF_PROGPU_PACKAGE_VERSION:-${progpu_source_version}}"
-if [[ ! "${progpu_package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
-  echo "Could not determine the ProGPU package version from ${progpu_source_props}." >&2
-  exit 1
-fi
+# Expensive stages whose inputs have not changed since their last successful run are skipped
+# (see "Stage receipts" below). --force, or DIST_LOCAL_FORCE=1, rebuilds everything.
+force_rebuild="${DIST_LOCAL_FORCE:-0}"
+for argument in "$@"; do
+  case "${argument}" in
+    --force) force_rebuild=1 ;;
+    *) echo "Unknown argument '${argument}'. Usage: $0 [--force]" >&2; exit 1 ;;
+  esac
+done
+
+# Versions match the newest release on nuget.org (LibreWPF/LibreWinForms and ProGPU ship
+# together at the same number). Update both lines when nuget.org moves on.
+dev_package_version="0.1.0-preview.65"
+progpu_package_version="0.1.0-preview.65"
+for version in "${dev_package_version}" "${progpu_package_version}"; do
+  if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+    echo "Invalid package version '${version}'." >&2
+    exit 1
+  fi
+done
 echo "== Package versions: LibreWPF/LibreWinForms ${dev_package_version}, ProGPU ${progpu_package_version} =="
 
 wpf_dotnet="${wpf_root}/.dotnet/dotnet"
@@ -95,14 +103,134 @@ fi
 
 run_wpf_msbuild() {
   if [[ "${target_platform}" == "windows" ]]; then
+    # One node by default: concurrent native projects were what exhausted memory around the
+    # System.Printing PCH (CL=/MP1 above does not parallelize anything - no project enables /MP).
+    # DIST_LOCAL_WINDOWS_MSBUILD_NODES raises it on a workstation with the memory to spare.
     "${wpf_msbuild}" "$@" \
-      -m:1 \
+      -m:"${DIST_LOCAL_WINDOWS_MSBUILD_NODES:-1}" \
       -property:Platform=x64 \
       -property:IjwHostSourcePath="${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll"
   else
     "${wpf_dotnet}" msbuild "$@"
   fi
 }
+
+# ---------------------------------------------------------------------------------------------
+# Stage receipts. A stage records a fingerprint of everything it consumed plus the files it
+# produced; the next run skips the stage when the fingerprint is identical and every recorded
+# file still exists. Fingerprints come from git (HEAD tree, uncommitted diff, untracked file
+# contents) and from content hashes of staged native payloads - never from timestamps - so a
+# checkout that merely touched files does not rebuild, and any real change does. A stage's
+# receipt is deleted before it runs, so a failed run can never leave a receipt that matches.
+receipts_dir="${repo_root}/artifacts/dist-receipts"
+
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
+}
+
+# repo_fingerprint <repo> [pathspec...]: the repository's state under the pathspecs (all of it
+# when none are given).
+repo_fingerprint() {
+  local repo="$1" path untracked
+  shift
+  untracked="$(git -C "${repo}" ls-files -o --exclude-standard -- "$@")"
+  {
+    if [[ $# -eq 0 ]]; then
+      git -C "${repo}" rev-parse 'HEAD^{tree}'
+    else
+      for path in "$@"; do
+        git -C "${repo}" rev-parse "HEAD:${path}" 2>/dev/null || echo "absent:${path}"
+      done
+    fi
+    git -C "${repo}" diff --no-ext-diff --binary HEAD -- "$@"
+    if [[ -n "${untracked}" ]]; then
+      printf '%s\n' "${untracked}"
+      printf '%s\n' "${untracked}" | git -C "${repo}" hash-object --stdin-paths
+    fi
+  } | sha256_stdin
+}
+
+# files_fingerprint <dir...>: names and contents of every file under the directories.
+files_fingerprint() {
+  local dir file
+  for dir in "$@"; do
+    if [[ ! -d "${dir}" ]]; then
+      echo "absent:${dir}"
+      continue
+    fi
+    while IFS= read -r file; do
+      printf '%s %s\n' "${file}" "$(git hash-object "${dir}/${file}")"
+    done < <(cd "${dir}" && find . -type f | LC_ALL=C sort)
+  done | sha256_stdin
+}
+
+stage_receipt() { printf '%s/%s.receipt' "${receipts_dir}" "$1"; }
+
+# stage_is_current <name> <fingerprint>
+stage_is_current() {
+  local receipt file
+  receipt="$(stage_receipt "$1")"
+  [[ "${force_rebuild}" != 1 && -f "${receipt}" ]] || return 1
+  [[ "$(head -n 1 "${receipt}")" == "$2" ]] || return 1
+  while IFS= read -r file; do
+    [[ -s "${file}" ]] || return 1
+  done < <(tail -n +2 "${receipt}")
+  echo "  $1: inputs unchanged since its last successful run, reusing its output (--force rebuilds)."
+}
+
+# record_stage <name> <fingerprint> <produced file...>
+record_stage() {
+  local receipt
+  receipt="$(stage_receipt "$1")"
+  mkdir -p "${receipts_dir}"
+  { printf '%s\n' "$2"; shift 2; printf '%s\n' "$@"; } > "${receipt}"
+}
+
+invalidate_stage() { rm -f "$(stage_receipt "$1")"; }
+
+# ---------------------------------------------------------------------------------------------
+# The feed is only ever changed by moving the previously published file aside first. If the run
+# fails, every package this run wrote is removed and the previous ones are put back, so a failed
+# run leaves the feed exactly as it was instead of without the version being republished.
+feed_backup="${repo_root}/artifacts/local-feed-backup"
+run_marker="${repo_root}/artifacts/.dist-local-run"
+rm -rf "${feed_backup}"
+mkdir -p "${feed_backup}"
+touch "${run_marker}"
+publish_succeeded=0
+
+# retire_feed_files <file...>: move published files aside (the first copy seen in this run is the
+# one restored on failure; anything this run itself wrote is simply deleted).
+retire_feed_files() {
+  local file
+  for file in "$@"; do
+    [[ -e "${file}" ]] || continue
+    if [[ "${file}" -nt "${run_marker}" || -e "${feed_backup}/$(basename "${file}")" ]]; then
+      rm -f "${file}"
+    else
+      mv -f "${file}" "${feed_backup}/"
+    fi
+  done
+}
+
+restore_feed_on_failure() {
+  local file restored=0
+  if [[ "${publish_succeeded}" == 1 ]]; then
+    rm -rf "${feed_backup}" "${run_marker}"
+    return
+  fi
+  shopt -s nullglob
+  for file in "${local_feed}"/*.nupkg "${local_feed}"/*.snupkg; do
+    [[ "${file}" -nt "${run_marker}" ]] && rm -f "${file}"
+  done
+  for file in "${feed_backup}"/*; do
+    mv -f "${file}" "${local_feed}/"
+    restored=$((restored + 1))
+  done
+  shopt -u nullglob
+  echo "== Run failed: removed this run's packages and restored ${restored} previously published file(s) in ${local_feed} ==" >&2
+}
+trap restore_feed_on_failure EXIT
 
 pack_wpf_project() {
   local project="$1"
@@ -132,7 +260,7 @@ pack_wpf_project() {
   # PresentationCore) is NOT packed here; it ships under runtimes/<rid>/ and the
   # consumer selects it per RID.
   local pack_platform=AnyCPU
-  rm -f \
+  retire_feed_files \
     "${local_feed}/${package_id}.${package_version}.nupkg" \
     "${local_feed}/${package_id}.${package_version}.snupkg"
   "${wpf_dotnet}" pack "${wpf_root}/${project}" \
@@ -160,6 +288,21 @@ pack_wpf_project() {
 if [[ "${target_platform}" == "windows" ]]; then
   echo "== Staging ProGPU native Windows runtimes =="
   for rid in win-x64 win-arm64; do
+    native_stage="native-${rid}"
+    native_staged=()
+    for native_dll in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
+      native_staged+=("${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/${native_dll}")
+    done
+    # The renderer is compiled from src/ProGPU.Native; the builder script pins wgpu-native and the
+    # headers itself, and the export list is the managed/native contract.
+    native_fingerprint="$({ echo "${rid} MSVC"
+      repo_fingerprint "${progpu_root}" src/ProGPU.Native eng/build-progpu-native-windows.ps1 eng/progpu-native-exports.txt \
+        eng/progpu-native-wgpu.version.json
+    } | sha256_stdin)"
+    if stage_is_current "${native_stage}" "${native_fingerprint}"; then
+      continue
+    fi
+    invalidate_stage "${native_stage}"
     # The Windows native builder uses a RID-fixed CMake build directory.  It may
     # retain a compiler choice from an interactive ClangCL attempt; this feed
     # explicitly uses the installed MSVC toolchain, so do not reuse that cache.
@@ -168,13 +311,13 @@ if [[ "${target_platform}" == "windows" ]]; then
       -Rid "${rid}" \
       -Compiler MSVC \
       -BuildOnly
-    for native_dll in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
-      staged="${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/${native_dll}"
+    for staged in "${native_staged[@]}"; do
       if [[ ! -s "${staged}" ]]; then
-        echo "The ProGPU native staging step did not produce ${rid}/${native_dll}." >&2
+        echo "The ProGPU native staging step did not produce ${rid}/$(basename "${staged}")." >&2
         exit 1
       fi
     done
+    record_stage "${native_stage}" "${native_fingerprint}" "${native_staged[@]}"
   done
 
   # ProGPU.Backend.Dx12 carries a separately-built WGPU/DXC runtime.  Its
@@ -225,6 +368,22 @@ if [[ "${target_platform}" == "windows" ]]; then
     [[ -n "${rustup_home}" ]] && dx12_environment+=("RUSTUP_HOME=$(cygpath -w "${rustup_home}")")
     [[ -n "${cargo_home}" ]] && dx12_environment+=("CARGO_HOME=$(cygpath -w "${cargo_home}")")
     dx12_staged="${progpu_root}/artifacts/progpu-dx12/package/${rid}/native"
+    dx12_stage="dx12-${rid}"
+    # Every input is pinned under eng/: the JSON pins (dependency, compiler, libclang) and the
+    # scripts that verify and stage them. The toolchain choice is part of the fingerprint too.
+    dx12_fingerprint="$({ echo "${rid} ${dx12_pwsh} ${rustup_bin}"
+      repo_fingerprint "${progpu_root}" eng/wgpu-dxc eng/build-progpu-dx12-runtime-windows.ps1 \
+        eng/build-wgpu-native-windows.ps1 eng/stage-wgpu-libclang.ps1 eng/stage-dxc-compiler.ps1 \
+        eng/stage-dx12-runtime.ps1 eng/progpu-native-wgpu.version.json
+    } | sha256_stdin)"
+    dx12_files=()
+    for dx12_file in wgpu_native.dll dxcompiler.dll dxil.dll progpu-dx12-runtime.json; do
+      dx12_files+=("${dx12_staged}/${dx12_file}")
+    done
+    if stage_is_current "${dx12_stage}" "${dx12_fingerprint}"; then
+      continue
+    fi
+    invalidate_stage "${dx12_stage}"
     # Every stage refuses an existing output directory ("must be a new directory"), so clear
     # them all.  download/ (pinned archives) and artifacts/wgpu-native-windows (the cargo
     # target) are caches the builder verifies, and keep a rerun incremental.
@@ -244,6 +403,7 @@ if [[ "${target_platform}" == "windows" ]]; then
       echo "The staged DX12 runtime receipt for ${rid} names a different RID." >&2
       exit 1
     fi
+    record_stage "${dx12_stage}" "${dx12_fingerprint}" "${dx12_files[@]}"
   done
 fi
 
@@ -253,10 +413,6 @@ fi
 # selected group does not own, so packages left behind by an earlier run of the same version
 # look like unexpected output and abort the build. Clear the version being published so each
 # run starts from a clean slate for it. Other versions stay in place.
-echo "== Clearing ${progpu_package_version} packages from the local feed =="
-rm -f "${local_feed}"/*."${progpu_package_version}".nupkg "${local_feed}"/*."${progpu_package_version}".snupkg
-rm -f "${local_feed}"/*."${dev_package_version}".nupkg "${local_feed}"/*."${dev_package_version}".snupkg
-
 # The macOS lane does not build the ProGPU native renderer; it reuses whatever sits in
 # artifacts/progpu-native/package/runtimes/osx-arm64/native and passes
 # ProGpuNativeSkipRuntimeValidation=true when packing ProGPU.Backend.Native. Nothing above
@@ -275,10 +431,38 @@ if [[ "${target_platform}" == "macos" ]]; then
     "${progpu_root}/eng/progpu-verify-native-exports.sh"
 fi
 
+# The whole ProGPU packaging stage (progpu-pack.sh plus the loop below) is skipped when ProGPU's
+# sources, the staged native payloads it packs and the requested versions are all unchanged; the
+# packages it published last time are then still in the feed and are left exactly as they are.
+progpu_package_group="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}"
+if [[ "${target_platform}" == "macos" ]]; then
+  progpu_native_payloads=("${progpu_root}/artifacts/progpu-native/package/runtimes/osx-arm64/native")
+else
+  progpu_native_payloads=("${progpu_root}/artifacts/progpu-native/package" "${progpu_root}/artifacts/progpu-dx12/package")
+fi
+progpu_pack_fingerprint="$({
+  echo "${progpu_package_version} ${dev_package_version} ${progpu_package_group} ${target_platform}"
+  echo "${PROGPU_PACKAGE_WINDOWS_ONLY} ${ProGpuNativePackageWindowsOnly} $("${wpf_dotnet}" --version)"
+  repo_fingerprint "${progpu_root}"
+  files_fingerprint "${progpu_native_payloads[@]}"
+} | sha256_stdin)"
+progpu_pack_current=0
+if stage_is_current progpu-packages "${progpu_pack_fingerprint}"; then
+  progpu_pack_current=1
+fi
+
+if [[ "${progpu_pack_current}" == 0 ]]; then
+invalidate_stage progpu-packages
+echo "== Clearing ${progpu_package_version} packages from the local feed =="
+shopt -s nullglob
+retire_feed_files "${local_feed}"/*."${progpu_package_version}".nupkg "${local_feed}"/*."${progpu_package_version}".snupkg \
+  "${local_feed}"/*."${dev_package_version}".nupkg "${local_feed}"/*."${dev_package_version}".snupkg
+shopt -u nullglob
+
 echo "== Packing ProGPU packages =="
 PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
-PROGPU_PACKAGE_GROUP="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}" \
+PROGPU_PACKAGE_GROUP="${progpu_package_group}" \
   "${progpu_root}/eng/progpu-pack.sh"
 
 echo "== Packing the ProGPU projects LibreWPF.Sdk depends on =="
@@ -309,8 +493,26 @@ for pair in \
   package_id="${pair##*:}"
   # These overwrite the verified progpu-pack.sh output of the same id and version, so pin the
   # PE machine field the same way progpu-pack.sh does: Platform alone does not stamp it.
-  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}" -p:PlatformTarget=AnyCPU
+  #
+  # progpu-pack.sh already built and packed this project a moment ago, at the same id and version
+  # and with the same AnyCPU pin, so reuse that build instead of compiling it a second time. Only
+  # ProGPU.Avalonia and ProGPU.DirectX are outside the opendevelop-macos group; they are the only
+  # ones that still have to build here. Keep the pack itself, because the package must be
+  # republished with this loop's properties.
+  pack_extra=(-p:PlatformTarget=AnyCPU)
+  if [[ "${package_id}" != "ProGPU.Avalonia" && "${package_id}" != "ProGPU.DirectX" ]]; then
+    pack_extra+=(--no-build)
+  fi
+  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}" "${pack_extra[@]}"
 done
+
+progpu_published=()
+while IFS= read -r published; do
+  progpu_published+=("${published}")
+done < <(find "${local_feed}" -maxdepth 1 -type f -newer "${run_marker}" \
+  \( -name "*.${progpu_package_version}.nupkg" -o -name "*.${progpu_package_version}.snupkg" \) | LC_ALL=C sort)
+record_stage progpu-packages "${progpu_pack_fingerprint}" "${progpu_published[@]}"
+fi
 
 # The per-RID managed payload (runtimes/<rid>/lib/net10.0/{PresentationCore,DirectWriteForwarder})
 # does NOT come from the transport build: the ArchNeutral project copies it out of
@@ -364,8 +566,25 @@ fi
 canonical_feed="${DIST_LOCAL_CANONICAL_WINFORMS_FEED:-${repo_root}/artifacts/canonical-winforms-feed}"
 canonical_feed_x64="${DIST_LOCAL_CANONICAL_WINFORMS_FEED_X64:-${repo_root}/artifacts/canonical-winforms-feed-x64}"
 
+# Canonical WinForms is built from all three trees (WindowsFormsIntegration from LibreWPF, the
+# WinForms packages from LibreWinForms, both against ProGPU), so any change in any of them
+# rebuilds it; an unchanged slice keeps its private feed directory from the last run.
+canonical_sources_fingerprint="$({
+  echo "${dev_package_version} ${progpu_package_version} ${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}"
+  repo_fingerprint "${wpf_root}"
+  repo_fingerprint "${winforms_root}"
+  repo_fingerprint "${progpu_root}"
+  files_fingerprint "${progpu_native_payloads[@]}"
+} | sha256_stdin)"
+
 build_canonical_winforms_slice() {
-  local output="$1" platform="$2"
+  local output="$1" platform="$2" stage fingerprint produced=()
+  stage="canonical-winforms-${platform:-anycpu}"
+  fingerprint="$(printf '%s %s\n' "${canonical_sources_fingerprint}" "${platform}" | sha256_stdin)"
+  if stage_is_current "${stage}" "${fingerprint}"; then
+    return 0
+  fi
+  invalidate_stage "${stage}"
   rm -rf "${output}"
   PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_OUTPUT="${output}" \
   PROGPU_WPF_CANONICAL_WINFORMS_PACKAGE_VERSION="${dev_package_version}" \
@@ -374,6 +593,14 @@ build_canonical_winforms_slice() {
   DOTNET_INSTALL_DIR="${wpf_root}/.dotnet" \
   PROGPU_WPF_RUN_DRAWING_QUALITY_GATES="${PROGPU_WPF_RUN_DRAWING_QUALITY_GATES:-0}" \
     "${wpf_root}/eng/progpu-wpf-canonical-winforms-integration.sh"
+  shopt -s nullglob
+  produced=("${output}"/*.nupkg)
+  shopt -u nullglob
+  if [[ "${#produced[@]}" -eq 0 ]]; then
+    echo "The canonical WinForms build produced no packages in ${output}." >&2
+    exit 1
+  fi
+  record_stage "${stage}" "${fingerprint}" "${produced[@]}"
 }
 
 build_canonical_winforms() {
@@ -427,24 +654,55 @@ echo "== Packing LibreWinForms packages =="
 # shared dev feed - by this point local-feed also holds LibreWPF.Transport/ProGPU/Sdk. Give it a
 # private staging directory and publish the result into the shared feed afterwards.
 librewinforms_feed="${DIST_LOCAL_LIBREWINFORMS_FEED:-${repo_root}/artifacts/librewinforms-feed}"
-rm -rf "${librewinforms_feed}"
-mkdir -p "${librewinforms_feed}"
+
+# The LibreWinForms bundle is skipped when LibreWinForms, the canonical slices it qualifies
+# against and the versions are unchanged: its private staging directory still holds the last
+# bundle, which is republished as is.
+librewinforms_fingerprint="$({
+  echo "${dev_package_version} ${progpu_package_version} ${target_platform} $(git -C "${wpf_root}" rev-parse HEAD)"
+  repo_fingerprint "${winforms_root}"
+  repo_fingerprint "${progpu_root}"
+} | sha256_stdin)"
 
 publish_librewinforms_packages() {
   shopt -s nullglob
-  local produced=("${librewinforms_feed}"/*.nupkg "${librewinforms_feed}"/*.snupkg)
+  local produced=("${librewinforms_feed}"/*.nupkg "${librewinforms_feed}"/*.snupkg) file
   shopt -u nullglob
   if [[ "${#produced[@]}" -eq 0 ]]; then
     echo "librewinforms-pack.sh produced no packages in ${librewinforms_feed}." >&2
     exit 1
   fi
-  cp -f "${produced[@]}" "${local_feed}/"
+  for file in "${produced[@]}"; do
+    retire_feed_files "${local_feed}/$(basename "${file}")"
+  done
+  # -p keeps the bundle's own timestamp, so a reused bundle does not look republished to the
+  # cache eviction below and consumers keep their already-extracted copy.
+  cp -fp "${produced[@]}" "${local_feed}/"
+  record_stage librewinforms "${librewinforms_fingerprint}" "${produced[@]}"
+}
+
+prepare_librewinforms_feed() {
+  invalidate_stage librewinforms
+  rm -rf "${librewinforms_feed}"
+  mkdir -p "${librewinforms_feed}"
 }
 
 if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; then
   if [[ "${target_platform}" == "windows" ]]; then
     build_canonical_winforms
   fi
+  # Completed only now, when every canonical slice (and so its receipt) is final.
+  librewinforms_fingerprint="$({ echo "${librewinforms_fingerprint}"
+    for receipt in "$(stage_receipt canonical-winforms-ARM64)" "$(stage_receipt canonical-winforms-x64)" \
+                   "$(stage_receipt canonical-winforms-anycpu)"; do
+      [[ -f "${receipt}" ]] && head -n 1 "${receipt}"
+    done
+    true
+  } | sha256_stdin)"
+  if stage_is_current librewinforms "${librewinforms_fingerprint}"; then
+    publish_librewinforms_packages
+  else
+  prepare_librewinforms_feed
   # WindowsFormsIntegration is built from the LibreWPF tree (it is the WPF<->WinForms bridge), so
   # the canonical WFI package records LibreWPF's commit via SourceLink, and
   # LIBREWINFORMS_CANONICAL_WFI_COMMIT is documented as "the exact LibreWPF source commit that
@@ -459,7 +717,9 @@ if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; t
   LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
     "${winforms_root}/eng/librewinforms-pack.sh"
   publish_librewinforms_packages
+  fi
 else
+prepare_librewinforms_feed
 LIBREWINFORMS_PACKAGE_OUTPUT="${librewinforms_feed}" \
 LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
 LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
@@ -592,6 +852,8 @@ if ! grep -Fqi -e "${local_feed}" -e "${local_feed_native}" <<<"${registered_sou
 else
   echo "Source already registered."
 fi
+
+publish_succeeded=1
 
 echo "== Published packages =="
 ls -1 "${local_feed}"/*.nupkg 2>/dev/null || echo "(none)"
