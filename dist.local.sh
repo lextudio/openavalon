@@ -40,7 +40,31 @@ for version in "${dev_package_version}" "${progpu_package_version}"; do
     exit 1
   fi
 done
-echo "== Package versions: LibreWPF/LibreWinForms ${dev_package_version}, ProGPU ${progpu_package_version} =="
+
+# section <title>: prints the stage banner and closes the previous stage's timer; the EXIT trap
+# prints the whole table, so a slow run says where its time went. SECONDS is a builtin - no fork.
+section_titles=()
+section_seconds=()
+section_started=${SECONDS}
+section() {
+  if [[ ${#section_titles[@]} -gt 0 ]]; then
+    section_seconds+=($((SECONDS - section_started)))
+  fi
+  section_titles+=("$1")
+  section_started=${SECONDS}
+  echo "== $1 =="
+}
+print_section_times() {
+  local i
+  [[ ${#section_titles[@]} -gt 0 ]] || return 0
+  section_seconds+=($((SECONDS - section_started)))
+  echo "== Stage times (total $((SECONDS / 60))m$((SECONDS % 60))s) =="
+  for i in "${!section_titles[@]}"; do
+    printf '  %4dm%02ds  %s\n' $((section_seconds[i] / 60)) $((section_seconds[i] % 60)) "${section_titles[i]}"
+  done
+}
+
+section "Package versions:LibreWPF/LibreWinForms ${dev_package_version}, ProGPU ${progpu_package_version}"
 
 wpf_dotnet="${wpf_root}/.dotnet/dotnet"
 if [[ ! -x "${wpf_dotnet}" && -x "${wpf_dotnet}.exe" ]]; then
@@ -142,7 +166,9 @@ repo_fingerprint() {
         git -C "${repo}" rev-parse "HEAD:${path}" 2>/dev/null || echo "absent:${path}"
       done
     fi
-    git -C "${repo}" diff --no-ext-diff --binary HEAD -- "$@"
+    # Submodules are fingerprinted on their own; =dirty keeps their recorded commit here but skips
+    # scanning their work trees, which cost ~20 s per call on LibreWPF.
+    git -C "${repo}" diff --no-ext-diff --binary --ignore-submodules=dirty HEAD -- "$@"
     if [[ -n "${untracked}" ]]; then
       printf '%s\n' "${untracked}"
       printf '%s\n' "${untracked}" | git -C "${repo}" hash-object --stdin-paths
@@ -152,15 +178,21 @@ repo_fingerprint() {
 
 # files_fingerprint <dir...>: names and contents of every file under the directories.
 files_fingerprint() {
-  local dir file
+  local dir files git_dir
   for dir in "$@"; do
     if [[ ! -d "${dir}" ]]; then
       echo "absent:${dir}"
       continue
     fi
-    while IFS= read -r file; do
-      printf '%s %s\n' "${file}" "$(git hash-object "${dir}/${file}")"
-    done < <(cd "${dir}" && find . -type f | LC_ALL=C sort)
+    # One git process per directory, not per file: process creation is slow on Windows.
+    # --stdin-paths resolves relative paths against the repository root, and Git for Windows
+    # does not translate /c/... paths read from stdin, so hand it absolute native paths.
+    files="$(cd "${dir}" && find . -type f | LC_ALL=C sort)"
+    [[ -n "${files}" ]] || continue
+    git_dir="${dir}"
+    if command -v cygpath >/dev/null 2>&1; then git_dir="$(cygpath -m "${dir}")"; fi
+    paste -d' ' <(printf '%s\n' "${files}") \
+      <(printf '%s\n' "${files}" | sed "s|^\./|${git_dir}/|" | git hash-object --stdin-paths)
   done | sha256_stdin
 }
 
@@ -215,6 +247,7 @@ retire_feed_files() {
 
 restore_feed_on_failure() {
   local file restored=0
+  print_section_times
   if [[ "${publish_succeeded}" == 1 ]]; then
     rm -rf "${feed_backup}" "${run_marker}"
     return
@@ -280,13 +313,62 @@ pack_wpf_project() {
   fi
 }
 
+# pack_wpf_projects_nobuild <version> <project:package-id...>: pack_wpf_project with --no-build
+# and PlatformTarget=AnyCPU for every pair, in ONE MSBuild process instead of one `dotnet pack`
+# each (~3.5 s apiece, mostly process start and evaluation). --no-build implies --no-restore, so
+# a traversal project calling Pack is all `dotnet pack` would have done; global properties flow to
+# every project the same as on the per-project command line.
+pack_wpf_projects_nobuild() {
+  local package_version="$1" pair traversal items="" native_root="${wpf_root}" native_feed="${local_feed}"
+  shift
+  if command -v cygpath >/dev/null 2>&1; then
+    native_root="$(cygpath -m "${wpf_root}")"
+    native_feed="$(cygpath -m "${local_feed}")"
+  fi
+  [[ $# -gt 0 ]] || return 0
+  for pair in "$@"; do
+    retire_feed_files \
+      "${local_feed}/${pair##*:}.${package_version}.nupkg" \
+      "${local_feed}/${pair##*:}.${package_version}.snupkg"
+    items+="    <PackProject Include=\"${native_root}/${pair%%:*}\" />"$'\n'
+  done
+  traversal="$(mktemp -d)/pack-nobuild.proj"
+  cat > "${traversal}" <<EOF
+<Project>
+  <ItemGroup>
+${items}  </ItemGroup>
+  <Target Name="Pack">
+    <MSBuild Projects="@(PackProject)" Targets="Pack" BuildInParallel="false" />
+  </Target>
+</Project>
+EOF
+  "${wpf_dotnet}" msbuild "${traversal}" \
+    -target:Pack \
+    -verbosity:minimal \
+    -property:Configuration=Release \
+    -property:NoBuild=true \
+    -property:_IsPacking=true \
+    -property:PackageOutputPath="${native_feed}/" \
+    -property:Version="${package_version}" \
+    -property:PackageVersion="${package_version}" \
+    -property:PlatformTarget=AnyCPU \
+    $([[ "${target_platform}" == "windows" ]] && echo "-property:Platform=AnyCPU -property:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
+  rm -rf "$(dirname "${traversal}")"
+  for pair in "$@"; do
+    if [[ ! -f "${local_feed}/${pair##*:}.${package_version}.nupkg" ]]; then
+      echo "pack produced no ${pair##*:}.${package_version}.nupkg from ${pair%%:*}." >&2
+      exit 1
+    fi
+  done
+}
+
 # ProGPU.Backend.Native packages the platform-native renderer rather than building it as a
 # side effect of `dotnet pack`.  The package project validates the staged payload before Pack,
 # so prepare both Windows slices first.  Keeping this here (before progpu-pack.sh) makes the
 # local-feed lane self-contained and prevents a clean checkout from silently depending on an
 # earlier developer build's artifacts/progpu-native tree.
 if [[ "${target_platform}" == "windows" ]]; then
-  echo "== Staging ProGPU native Windows runtimes =="
+  section "Staging ProGPU native Windows runtimes"
   for rid in win-x64 win-arm64; do
     native_stage="native-${rid}"
     native_staged=()
@@ -334,7 +416,7 @@ if [[ "${target_platform}" == "windows" ]]; then
   # Toolchains isolated under artifacts/tools/{pwsh-x64,rustup-<arch>} are used
   # when present and no explicit override is given.
   tools_root="${repo_root}/artifacts/tools"
-  echo "== Staging ProGPU DX12 Windows runtimes (host ${host_native_arch:-unknown}) =="
+  section "Staging ProGPU DX12 Windows runtimes (host ${host_native_arch:-unknown})"
   for rid in win-x64 win-arm64; do
     arch="${rid#win-}"
     arch_upper="$(tr '[:lower:]' '[:upper:]' <<<"${arch}")"
@@ -453,19 +535,20 @@ fi
 
 if [[ "${progpu_pack_current}" == 0 ]]; then
 invalidate_stage progpu-packages
-echo "== Clearing ${progpu_package_version} packages from the local feed =="
+section "Clearing ${progpu_package_version} packages from the local feed"
 shopt -s nullglob
 retire_feed_files "${local_feed}"/*."${progpu_package_version}".nupkg "${local_feed}"/*."${progpu_package_version}".snupkg \
   "${local_feed}"/*."${dev_package_version}".nupkg "${local_feed}"/*."${dev_package_version}".snupkg
 shopt -u nullglob
 
-echo "== Packing ProGPU packages =="
+section "Packing ProGPU packages"
 PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
 PROGPU_PACKAGE_OUTPUT="${local_feed}" \
 PROGPU_PACKAGE_GROUP="${progpu_package_group}" \
   "${progpu_root}/eng/progpu-pack.sh"
 
-echo "== Packing the ProGPU projects LibreWPF.Sdk depends on =="
+section "Packing the ProGPU projects LibreWPF.Sdk depends on"
+nobuild_pack_pairs=()
 # LibreWPF.Sdk consumes these under the LibreWPF.* preview version, distinct
 # from the plain ProGPU.* packages above (which use ProGPU's own version).
 for pair in \
@@ -499,12 +582,13 @@ for pair in \
   # ProGPU.Avalonia and ProGPU.DirectX are outside the opendevelop-macos group; they are the only
   # ones that still have to build here. Keep the pack itself, because the package must be
   # republished with this loop's properties.
-  pack_extra=(-p:PlatformTarget=AnyCPU)
   if [[ "${package_id}" != "ProGPU.Avalonia" && "${package_id}" != "ProGPU.DirectX" ]]; then
-    pack_extra+=(--no-build)
+    nobuild_pack_pairs+=("${pair}")
+    continue
   fi
-  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}" "${pack_extra[@]}"
+  pack_wpf_project "${project}" "${package_id}" "${progpu_package_version}" -p:PlatformTarget=AnyCPU
 done
+pack_wpf_projects_nobuild "${progpu_package_version}" "${nobuild_pack_pairs[@]}"
 
 progpu_published=()
 while IFS= read -r published; do
@@ -524,8 +608,24 @@ fi
 # "MissingMethodException: InputManager.get_UsesPortableInput()", an API the fresh
 # PresentationFramework expected and the stale PresentationCore did not have.
 if [[ "${target_platform}" == "windows" ]]; then
-  echo "== Producing the per-RID Windows managed runtime payload =="
-  pwsh -NoProfile -File "${wpf_root}/eng/progpu-wpf-windows-managed-runtime.ps1" -Configuration Release
+  section "Producing the per-RID Windows managed runtime payload"
+  # A dozen Arcade builds; skipped when every tree it compiles from is unchanged. System.Private.
+  # Windows.Core comes from LibreWinForms and the interop from ProGPU, so all three trees count.
+  managed_runtime_dir="${wpf_root}/artifacts/windows-managed-runtime"
+  managed_runtime_fingerprint="$({
+    echo "Release $("${wpf_dotnet}" --version)"
+    repo_fingerprint "${wpf_root}"
+    repo_fingerprint "${winforms_root}"
+    repo_fingerprint "${progpu_root}"
+  } | sha256_stdin)"
+  if ! stage_is_current managed-runtime "${managed_runtime_fingerprint}"; then
+    invalidate_stage managed-runtime
+    pwsh -NoProfile -File "${wpf_root}/eng/progpu-wpf-windows-managed-runtime.ps1" -Configuration Release
+    managed_runtime_files=()
+    while IFS= read -r staged; do
+      managed_runtime_files+=("${staged}")
+    done < <(find "${managed_runtime_dir}" -type f -name '*.dll' | LC_ALL=C sort)
+  fi
   # `pwsh -File` reports 0 even when the script dies on a terminating error, so `set -e` never
   # fired: the script deleted the payload directory, threw on its first Join-Path, and the pack
   # step then shipped whatever per-RID files happened to survive from an earlier run. Assert the
@@ -542,6 +642,10 @@ if [[ "${target_platform}" == "windows" ]]; then
       fi
     done
   done
+  # Recorded only after the payload checks above pass.
+  if [[ -n "${managed_runtime_files+x}" ]]; then
+    record_stage managed-runtime "${managed_runtime_fingerprint}" "${managed_runtime_files[@]}"
+  fi
 fi
 
 # LibreWPF.Transport is zipped from a staging tree, not from a project's build output, and that
@@ -554,7 +658,7 @@ fi
 # version-pin problem. Clear the staging tree so every pack starts from what this build produced.
 transport_staging="${wpf_root}/artifacts/packaging/Release/LibreWPF.Transport"
 if [[ -d "${transport_staging}" ]]; then
-  echo "== Clearing stale LibreWPF.Transport staging payload =="
+  section "Clearing stale LibreWPF.Transport staging payload"
   rm -rf "${transport_staging}/lib" "${transport_staging}/ref"
 fi
 
@@ -613,33 +717,27 @@ build_canonical_winforms() {
   fi
 }
 
-echo "== Building the LibreWPF managed transport and theme payload =="
+section "Building the LibreWPF managed transport and theme payload"
 # On macOS the canonical WinForms integration graph must run before the transport build.
 if [[ "${target_platform}" == "macos" ]]; then
   build_canonical_winforms
 fi
+# Restore must stay in its own process so package-generated properties are reevaluated before
+# compiling, but both restores share one process and both builds another: two MSBuild starts and
+# graph evaluations instead of four, and the themes reuse the transport projects' cached results.
+# Targets run in the listed order, exactly as the four separate invocations did.
 run_wpf_msbuild \
   "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
-  -target:RestoreManagedTransport \
+  "-target:RestoreManagedTransport;RestoreThemes" \
   -property:Configuration=Release \
   -verbosity:minimal
 run_wpf_msbuild \
   "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
-  -target:BuildManagedTransport \
-  -property:Configuration=Release \
-  -verbosity:minimal
-run_wpf_msbuild \
-  "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
-  -target:RestoreThemes \
-  -property:Configuration=Release \
-  -verbosity:minimal
-run_wpf_msbuild \
-  "${wpf_root}/eng/ProGPU.Wpf.ValidationGraphs.proj" \
-  -target:BuildThemes \
+  "-target:BuildManagedTransport;BuildThemes" \
   -property:Configuration=Release \
   -verbosity:minimal
 
-echo "== Packing LibreWPF transport, ProGPU bridge, and SDK =="
+section "Packing LibreWPF transport, ProGPU bridge, and SDK"
 pack_wpf_project "packaging/Microsoft.DotNet.Wpf.GitHub/Microsoft.DotNet.Wpf.GitHub.ArchNeutral.csproj" "LibreWPF.Transport" "${dev_package_version}"
 pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_package_version}"
 # The SDK records which ProGPU version its consumers restore; keep it in step with this feed
@@ -647,7 +745,7 @@ pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_pac
 pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}" \
   -p:ProGpuPackageVersion="${progpu_package_version}"
 
-echo "== Packing LibreWinForms packages =="
+section "Packing LibreWinForms packages"
 # librewinforms-pack.sh validates that its output directory holds EXACTLY the LibreWinForms
 # preview bundle and nothing else ("Unexpected current-version package artifact: ..."), which is a
 # legitimate purity gate for a release bundle but incompatible with pointing it straight at the
@@ -749,67 +847,9 @@ fi
 # PlatformTarget=AnyCPU for the transport assemblies and, separately, for every *-ref.csproj.
 # Report rather than fail: the canonical WinForms graph still emits arm64
 # WindowsFormsIntegration/ProGPU.DirectX, which is a separate fix.
-echo "== Checking payload architectures =="
-probe_pe_machine() {
-  local file="$1" off
-  off="$(od -An -tu4 -j 60 -N 4 "${file}" 2>/dev/null | tr -d ' ')"
-  [[ "${off}" =~ ^[0-9]+$ ]] || return 1
-  od -An -tx2 -j $((off + 4)) -N 2 "${file}" 2>/dev/null | tr -d ' '
-}
-
-check_anycpu_payload() {
-  local scratch offenders=0 pkg entry tmp machine rid expected
-  scratch="$(mktemp -d)"
-  for pkg in "${local_feed}"/*.nupkg; do
-    [[ -e "${pkg}" ]] || continue
-    while IFS= read -r entry; do
-      [[ -n "${entry}" ]] || continue
-      tmp="${scratch}/probe.dll"
-      unzip -p "${pkg}" "${entry}" > "${tmp}" 2>/dev/null || continue
-      [[ -s "${tmp}" ]] || continue
-      machine="$(probe_pe_machine "${tmp}")" || continue
-      [[ -n "${machine}" ]] || continue
-      # 0x014c is both AnyCPU and x86, and is always acceptable.
-      [[ "${machine}" == "014c" ]] && continue
-      # DirectWriteForwarder is C++/CLI and therefore CANNOT be AnyCPU, yet it has to appear in
-      # lib/<tfm> as well so a RID-neutral restore resolves the reference at all. There is no
-      # version of this file that satisfies the lib/ rule, so flagging it forever would only
-      # train the reader to ignore this report. Consumers get the right one because
-      # ProGPU.Wpf.Sdk.targets prefers runtimes/<rid>/ over lib/ when copying the payload.
-      case "${entry}" in
-        lib/*/DirectWriteForwarder.dll) continue ;;
-      esac
-      case "${entry}" in
-        runtimes/*)
-          rid="${entry#runtimes/}"
-          rid="${rid%%/*}"
-          case "${rid}" in
-            win-x64)   expected="8664" ;;
-            win-arm64) expected="aa64" ;;
-            win-x86)   expected="014c" ;;
-            *)         expected="" ;;
-          esac
-          [[ -n "${expected}" && "${machine}" == "${expected}" ]] && continue
-          echo "  wrong-arch for ${rid}: $(basename "${pkg}") ${entry} (machine 0x${machine})" >&2
-          ;;
-        *)
-          echo "  arch-stamped: $(basename "${pkg}") ${entry} (machine 0x${machine})" >&2
-          ;;
-      esac
-      offenders=$((offenders + 1))
-    done < <(unzip -Z1 "${pkg}" 2>/dev/null |
-               grep -E '^(lib|ref)/[^/]+/.*\.dll$|^runtimes/[^/]+/lib/[^/]+/.*\.dll$')
-  done
-  rm -rf "${scratch}"
-  if [[ "${offenders}" -gt 0 ]]; then
-    echo "  ${offenders} assemblies carry an architecture their folder cannot promise; they will" >&2
-    echo "  fail to load, or fail the consumer's build with CS8012 where the entry is under ref/." >&2
-    echo "  See OpenDevelop doc/technotes/librewpf.md." >&2
-  else
-    echo "  lib/, ref/ and every runtimes/<rid>/lib/ entry carry a loadable architecture."
-  fi
-}
-check_anycpu_payload
+section "Checking payload architectures"
+# One process for every entry of every package; tools/CheckPayloadArch.cs explains why.
+"${wpf_dotnet}" run "${repo_root}/tools/CheckPayloadArch.cs" -- "${local_feed}"
 
 # NuGet never re-extracts a package whose id+version it already has, and this feed republishes the
 # same preview version every run. A corrected package therefore sits in the feed while every
@@ -818,19 +858,22 @@ check_anycpu_payload
 # ARM64 assemblies to an x64 process for a full day, surviving several rounds of "fixed and
 # verified" because every check looked at the feed rather than the cache. Evict by timestamp - the
 # feed file is newer than the extraction directory exactly when the package was republished.
-echo "== Evicting stale NuGet cache entries for republished packages =="
+section "Evicting stale NuGet cache entries for republished packages"
 evict_stale_cache_entries() {
   local nuget_root evicted=0 pkg base id ver cached
   nuget_root="${NUGET_PACKAGES:-${HOME}/.nuget/packages}"
   [[ -d "${nuget_root}" ]] || { echo "  no global package folder at ${nuget_root}."; return; }
   for pkg in "${local_feed}"/*.nupkg; do
     [[ -e "${pkg}" ]] || continue
-    base="$(basename "${pkg}" .nupkg)"
+    base="${pkg##*/}"; base="${base%.nupkg}"
     # "<Id>.<Version>" where the version starts at the first dot followed by a digit.
-    ver="$(sed -E 's/^.*\.([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$/\1/' <<<"${base}")"
-    id="${base%".${ver}"}"
-    [[ -n "${ver}" && "${id}" != "${base}" ]] || continue
-    cached="${nuget_root}/$(tr '[:upper:]' '[:lower:]' <<<"${id}")/${ver}"
+    # Bash builtins only; a sed/tr per package costs ~0.25 s each on Windows.
+    [[ "${base}" =~ ^(.*)\.([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] || continue
+    id="${BASH_REMATCH[1]}"
+    ver="${BASH_REMATCH[2]}"
+    # macOS /bin/bash 3.2 has no ${var,,}; forks are cheap there.
+    if (( BASH_VERSINFO[0] >= 4 )); then id="${id,,}"; else id="$(tr '[:upper:]' '[:lower:]' <<<"${id}")"; fi
+    cached="${nuget_root}/${id}/${ver}"
     [[ -d "${cached}" ]] || continue
     if [[ "${cached}" -ot "${pkg}" ]]; then
       rm -rf "${cached}"
@@ -842,18 +885,29 @@ evict_stale_cache_entries() {
 }
 evict_stale_cache_entries
 
-echo "== Registering local NuGet source '${local_feed_name}' =="
+section "Registering local NuGet source '${local_feed_name}'"
 # dotnet prints the registered path in Windows form on Windows; compare both spellings.
 local_feed_native="${local_feed}"
 command -v cygpath >/dev/null 2>&1 && local_feed_native="$(cygpath -w "${local_feed}")"
-registered_sources="$(dotnet nuget list source)"
-if ! grep -Fqi -e "${local_feed}" -e "${local_feed_native}" <<<"${registered_sources}"; then
-  dotnet nuget add source "${local_feed}" --name "${local_feed_name}"
+registered_sources="$(dotnet nuget list source || true)"
+# Builtin case-insensitive match, not grep: grep "Aborted" here at the end of a two-hour run
+# (MSYS process start failing under memory pressure), which rolled back the whole feed.
+shopt -s nocasematch
+source_registered=0
+[[ "${registered_sources}" == *"${local_feed}"* || "${registered_sources}" == *"${local_feed_native}"* ]] && source_registered=1
+shopt -u nocasematch
+if [[ "${source_registered}" == 0 ]]; then
+  # Registration is a convenience, never a build gate. `dotnet nuget add source` fails with
+  # "The source specified is invalid" in Git for Windows Bash (it wants a native path, and the
+  # name may already exist), and that non-zero exit would otherwise trip restore_feed_on_failure
+  # and roll back an otherwise-good feed.
+  dotnet nuget add source "${local_feed}" --name "${local_feed_name}" \
+    || echo "warning: could not register NuGet source '${local_feed_name}' (continuing)" >&2
 else
   echo "Source already registered."
 fi
 
 publish_succeeded=1
 
-echo "== Published packages =="
+section "Published packages"
 ls -1 "${local_feed}"/*.nupkg 2>/dev/null || echo "(none)"
