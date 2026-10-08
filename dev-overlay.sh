@@ -59,8 +59,10 @@ for name in "$@"; do
   # The same switches dist.local.sh's local-feed lane uses for the validation graph.
   "${wpf_dotnet}" build "${wpf_root}/${project}" -c Release -v:minimal \
     -p:RunNetFrameworkApiCompat=false -p:RunRefApiCompat=false
+  # The WPF assemblies build into artifacts/bin; the ProGPU ones into their project's own bin.
   built="${wpf_root}/artifacts/bin/${name}/Release/net10.0/${name}.dll"
-  [[ -f "${built}" ]] || { echo "The build did not produce ${built}." >&2; exit 1; }
+  [[ -f "${built}" ]] || built="${wpf_root}/$(dirname "${project}")/bin/Release/net10.0/${name}.dll"
+  [[ -f "${built}" ]] || { echo "The build did not produce ${name}.dll in artifacts/bin or the project's bin." >&2; exit 1; }
 
   # A wrong-architecture managed assembly fails to load rather than falling back to JIT.
   if [[ "$(probe_pe_machine "${built}")" != "$(probe_pe_machine "${target}")" ]]; then
