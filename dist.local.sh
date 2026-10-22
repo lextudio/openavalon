@@ -11,8 +11,24 @@ winforms_root="${wpf_root}/external/LibreWinForms"
 # ProGPU's package list and MSBuild props resolve the framework projects it packs
 # (LibreWPF.Interop, System.Drawing.Common) from these roots, and default to
 # directories under ProGPU itself that do not exist in this layout.
-export LibreWpfSourceRoot="${wpf_root}"
-export LibreWinFormsSourceRoot="${winforms_root}"
+#
+# These reach MSBuild as environment properties, so on Git Bash they must be Windows paths:
+# dotnet.exe does not understand /c/... in a property value.
+env_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+export LibreWpfSourceRoot="$(env_path "${wpf_root}")"
+export LibreWinFormsSourceRoot="$(env_path "${winforms_root}")"
+# Native runtimes are staged once, in LibreWPF's ProGPU. LibreWinForms packs its own nested ProGPU
+# checkout (the drawing-runtime group includes ProGPU.Backend.Native), whose validation would
+# otherwise look under that checkout's artifacts folder and find nothing staged.
+export ProGpuNativeRuntimeRoot="$(env_path "${progpu_root}")/artifacts/progpu-native/package"
+# A reused MSBuild node keeps the environment it was started with (PATH, DOTNET_ROOT, the roots
+# above), so a node left over from an earlier build - by another SDK, or a stage that set a
+# different PATH - runs a later Exec with the wrong one: "command not found", exit 127, with no
+# message of its own. Cost: a few seconds of node start-up per build; benefit: the failure that
+# changes between identical runs goes away.
+export MSBUILDDISABLENODEREUSE=1
 
 local_feed="${DIST_LOCAL_FEED:-${repo_root}/artifacts/local-feed}"
 local_feed_name="${DIST_LOCAL_FEED_NAME:-openavalon-local}"
@@ -406,6 +422,9 @@ if [[ "${target_platform}" == "windows" ]]; then
       fi
     done
     record_stage "${native_stage}" "${native_fingerprint}" "${native_staged[@]}"
+    # The CMake tree is only an intermediate: it is deleted before every rebuild (above), never
+    # reused, and the receipt lists the staged package/ files instead. ~250 MB per RID.
+    rm -rf "${progpu_root}/artifacts/progpu-native/build-${rid}"
   done
 
   # ProGPU.Backend.Dx12 carries a separately-built WGPU/DXC runtime.  Its
@@ -492,6 +511,12 @@ if [[ "${target_platform}" == "windows" ]]; then
       exit 1
     fi
     record_stage "${dx12_stage}" "${dx12_fingerprint}" "${dx12_files[@]}"
+    # Build-time scratch only (LIBCLANG_PATH, the cargo dependency and compiler checkouts); the
+    # receipt lists package/<rid>/native, and download/ plus artifacts/wgpu-native-windows stay as
+    # the verified caches that keep a rerun incremental.
+    for dx12_output in libclang dependency compiler; do
+      rm -rf "${progpu_root}/artifacts/progpu-dx12/${dx12_output}/${rid}"
+    done
   done
 fi
 
@@ -548,10 +573,25 @@ retire_feed_files "${local_feed}"/*."${progpu_package_version}".nupkg "${local_f
 shopt -u nullglob
 
 section "Packing ProGPU packages"
+# progpu-pack.sh verifies its whole output directory (package sizes, duplicate archive paths), so
+# it cannot write straight into the shared feed: older versions kept there are not its to judge
+# (preview.65's LibreWPF.Sdk carries a duplicate README.md). Pack into a directory of its own and
+# copy the result in. Plain cp, not -p, so a failed run still recognises these as this run's files.
+progpu_feed="${DIST_LOCAL_PROGPU_FEED:-${repo_root}/artifacts/progpu-feed}"
+rm -rf "${progpu_feed}"
+mkdir -p "${progpu_feed}"
 PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
-PROGPU_PACKAGE_OUTPUT="${local_feed}" \
+PROGPU_PACKAGE_OUTPUT="${progpu_feed}" \
 PROGPU_PACKAGE_GROUP="${progpu_package_group}" \
   "${progpu_root}/eng/progpu-pack.sh"
+shopt -s nullglob
+progpu_produced=("${progpu_feed}"/*.nupkg "${progpu_feed}"/*.snupkg)
+shopt -u nullglob
+if [[ "${#progpu_produced[@]}" -eq 0 ]]; then
+  echo "progpu-pack.sh produced no packages in ${progpu_feed}." >&2
+  exit 1
+fi
+cp -f "${progpu_produced[@]}" "${local_feed}/"
 
 section "Packing the ProGPU projects LibreWPF.Sdk depends on"
 nobuild_pack_pairs=()
@@ -575,8 +615,8 @@ for pair in \
   "external/ProGPU/src/ProGPU.WinUI/ProGPU.WinUI.csproj:ProGPU.WinUI" \
   "external/ProGPU/src/ProGPU.Avalonia/ProGPU.Avalonia.csproj:ProGPU.Avalonia" \
   "external/ProGPU/src/SkiaSharp/SkiaSharp.csproj:ProGPU.SkiaSharp" \
-  "external/ProGPU/src/System.Drawing.Common/System.Drawing.Common.csproj:ProGPU.System.Drawing.Common" \
-  "external/ProGPU/src/ProGPU.Wpf.Interop/ProGPU.Wpf.Interop.csproj:LibreWPF.Interop" \
+  "external/LibreWinForms/src/ProGPU.Drawing/System.Drawing.Common/System.Drawing.Common.csproj:ProGPU.System.Drawing.Common" \
+  "src/ProGPU.Wpf.Interop/ProGPU.Wpf.Interop.csproj:LibreWPF.Interop" \
 ; do
   project="${pair%%:*}"
   package_id="${pair##*:}"
@@ -601,7 +641,34 @@ while IFS= read -r published; do
   progpu_published+=("${published}")
 done < <(find "${local_feed}" -maxdepth 1 -type f -newer "${run_marker}" \
   \( -name "*.${progpu_package_version}.nupkg" -o -name "*.${progpu_package_version}.snupkg" \) | LC_ALL=C sort)
-record_stage progpu-packages "${progpu_pack_fingerprint}" "${progpu_published[@]}"
+
+# Keep the finished packages outside the feed. A failed later stage rolls the feed back and would
+# delete every file this stage wrote, and the receipt would then point at nothing, so the ~10
+# minute pack (and the verification after it) would repeat on every retry. The receipt lists the
+# copies in progpu_stage instead, which a rollback never touches.
+progpu_stage="${repo_root}/artifacts/progpu-stage"
+rm -rf "${progpu_stage}"
+mkdir -p "${progpu_stage}"
+cp -fp "${progpu_published[@]}" "${progpu_stage}/"
+progpu_staged=()
+for published in "${progpu_published[@]}"; do
+  progpu_staged+=("${progpu_stage}/$(basename "${published}")")
+done
+record_stage progpu-packages "${progpu_pack_fingerprint}" "${progpu_staged[@]}"
+# progpu_stage holds the same files and is what the receipt lists.
+rm -rf "${progpu_feed}"
+else
+  # Reusing the previous pack: put its packages back into the feed. A failed run removes what it
+  # wrote, so they are not necessarily still there. Plain cp, not -p, so a failed run treats them
+  # as its own files again.
+  progpu_reused=()
+  while IFS= read -r published; do
+    progpu_reused+=("${published}")
+  done < <(tail -n +2 "$(stage_receipt progpu-packages)")
+  for published in "${progpu_reused[@]}"; do
+    retire_feed_files "${local_feed}/$(basename "${published}")"
+  done
+  cp -f "${progpu_reused[@]}" "${local_feed}/"
 fi
 
 # The per-RID managed payload (runtimes/<rid>/lib/net10.0/{PresentationCore,DirectWriteForwarder})
@@ -752,6 +819,13 @@ pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "L
   -p:ProGpuPackageVersion="${progpu_package_version}"
 
 section "Packing LibreWinForms packages"
+# LibreWinForms' global.json pins an 11.0.100 preview that the system dotnet does not have; only
+# LibreWPF's .dotnet does. The pack itself runs from a directory without that constraint, but the
+# canonical build it starts from the LibreWinForms root (an Exec, using the dotnet that is running
+# the pack) does not, and fails with "The required .NET SDK wasn't found". Make LibreWPF's SDK the
+# host for the whole stage so both resolve it.
+export PATH="${wpf_root}/.dotnet:${PATH}"
+export DOTNET_ROOT="$(env_path "${wpf_root}/.dotnet")"
 # librewinforms-pack.sh validates that its output directory holds EXACTLY the LibreWinForms
 # preview bundle and nothing else ("Unexpected current-version package artifact: ..."), which is a
 # legitimate purity gate for a release bundle but incompatible with pointing it straight at the
@@ -814,8 +888,15 @@ if [[ "${target_platform}" == "macos" || "${target_platform}" == "windows" ]]; t
   # against its own repo HEAD. Passing the LibreWinForms commit here failed that first check with
   # "Canonical WFI package does not record expected LibreWPF commit ...".
   canonical_commit="$(git -C "${wpf_root}" rev-parse HEAD)"
+  # LibreWinForms' src/ProGPU.Drawing/Directory.Build.props sends a checkout that sits inside
+  # LibreWPF to LibreWPF's ProGPU ("a LibreWPF consumer uses its one aligned producer checkout").
+  # The packaging contracts instead expect the whole project closure in LibreWinForms' own nested
+  # ProGPU and fail with "Source closure lost NetCurrent" when it spans two copies. The override
+  # has the highest priority there. It is the same commit either way (the canonical gate requires
+  # it), and only this pack sees it: the canonical build passes its own roots explicitly.
   LIBREWINFORMS_CANONICAL_WFI_PACKAGE_SOURCE="${canonical_feed}" \
   LIBREWINFORMS_CANONICAL_WFI_COMMIT="${canonical_commit}" \
+  LibreWinFormsProGpuSourceRoot="$(env_path "${winforms_root}")/external/ProGPU/" \
   LIBREWINFORMS_PACKAGE_OUTPUT="${librewinforms_feed}" \
   LIBREWINFORMS_DEV_PACKAGE_VERSION="${dev_package_version}" \
   LIBREWINFORMS_PROGPU_PACKAGE_VERSION="${progpu_package_version}" \
