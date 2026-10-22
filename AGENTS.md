@@ -24,7 +24,7 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
   the last step fails with "Canonical WFI was not qualified against LibreWinForms commit ...".
 - Versions: hard-coded at the top of `dist.local.sh` (`dev_package_version`,
   `progpu_package_version`), both matching the newest release on nuget.org (currently
-  `0.1.0-preview.65`); update both when nuget.org moves on. The run prints them first
+  `0.1.0-preview.69`); update both when nuget.org moves on. The run prints them first
   (`== Package versions: ... ==`). Never lower a version to match a consumer's pin — earlier
   versions already in the feed stay in place so older pins keep restoring. `LibreWPF.Sdk` is packed with
   `ProGpuPackageVersion=<ProGPU version>` so its consumers restore the ProGPU packages this feed

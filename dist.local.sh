@@ -32,8 +32,8 @@ done
 
 # Versions match the newest release on nuget.org (LibreWPF/LibreWinForms and ProGPU ship
 # together at the same number). Update both lines when nuget.org moves on.
-dev_package_version="0.1.0-preview.65"
-progpu_package_version="0.1.0-preview.65"
+dev_package_version="0.1.0-preview.69"
+progpu_package_version="0.1.0-preview.69"
 for version in "${dev_package_version}" "${progpu_package_version}"; do
   if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
     echo "Invalid package version '${version}'." >&2
