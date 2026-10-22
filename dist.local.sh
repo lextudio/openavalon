@@ -8,6 +8,12 @@ wpf_root="${repo_root}/LibreWPF"
 progpu_root="${wpf_root}/external/ProGPU"
 winforms_root="${wpf_root}/external/LibreWinForms"
 
+# ProGPU's package list and MSBuild props resolve the framework projects it packs
+# (LibreWPF.Interop, System.Drawing.Common) from these roots, and default to
+# directories under ProGPU itself that do not exist in this layout.
+export LibreWpfSourceRoot="${wpf_root}"
+export LibreWinFormsSourceRoot="${winforms_root}"
+
 local_feed="${DIST_LOCAL_FEED:-${repo_root}/artifacts/local-feed}"
 local_feed_name="${DIST_LOCAL_FEED_NAME:-openavalon-local}"
 # The feed is built for the host: Git for Windows Bash prepares the Windows release feed
