@@ -96,6 +96,18 @@ elif [[ ! -x "${wpf_dotnet}" ]]; then
   wpf_dotnet="dotnet"
 fi
 
+# The Windows managed build uses ijwhost from the SDK that LibreWPF pins. The
+# SDK pack is versioned as the runtime (11.0.0-rc.2...), rather than the
+# feature-band compiler version (11.0.100-rc.2...), so derive it from the
+# single source of truth instead of embedding an obsolete preview path.
+wpf_sdk_version="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "${wpf_root}/global.json" | head -n 1)"
+if [[ -z "${wpf_sdk_version}" ]]; then
+  echo "Unable to read LibreWPF's pinned SDK version from ${wpf_root}/global.json." >&2
+  exit 1
+fi
+wpf_runtime_pack_version="${wpf_sdk_version/.100-/.0-}"
+wpf_ijwhost_path="${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/${wpf_runtime_pack_version}/runtimes/win-x64/native/ijwhost.dll"
+
 mkdir -p "${local_feed}"
 
 if [[ "${target_platform}" != "all" && "${target_platform}" != "macos" && "${target_platform}" != "windows" ]]; then
@@ -166,7 +178,7 @@ run_wpf_msbuild() {
     "${wpf_msbuild}" "$@" \
       -m:"${DIST_LOCAL_WINDOWS_MSBUILD_NODES:-1}" \
       -property:Platform=x64 \
-      -property:IjwHostSourcePath="${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll"
+      -property:IjwHostSourcePath="${wpf_ijwhost_path}"
   else
     "${wpf_dotnet}" msbuild "$@"
   fi
@@ -336,7 +348,7 @@ pack_wpf_project() {
     -p:Version="${package_version}" \
     -p:PackageVersion="${package_version}" \
     "$@" \
-    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform} -p:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
+    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform} -p:IjwHostSourcePath=${wpf_ijwhost_path}")
   # A skipped pack target still exits 0, so the exit code alone cannot tell a
   # real pack from one that produced nothing.  Verify the artifact instead.
   if [[ ! -f "${local_feed}/${package_id}.${package_version}.nupkg" ]]; then
@@ -385,7 +397,7 @@ EOF
     -property:Version="${package_version}" \
     -property:PackageVersion="${package_version}" \
     -property:PlatformTarget=AnyCPU \
-    $([[ "${target_platform}" == "windows" ]] && echo "-property:Platform=AnyCPU -property:IjwHostSourcePath=${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/11.0.0-preview.7.26381.103/runtimes/win-x64/native/ijwhost.dll")
+    $([[ "${target_platform}" == "windows" ]] && echo "-property:Platform=AnyCPU -property:IjwHostSourcePath=${wpf_ijwhost_path}")
   rm -rf "$(dirname "${traversal}")"
   for pair in "$@"; do
     if [[ ! -f "${local_feed}/${pair##*:}.${package_version}.nupkg" ]]; then

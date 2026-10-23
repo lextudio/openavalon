@@ -27,11 +27,16 @@ jobs:
           git submodule update --init --force --recursive
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.100-rc.2.26504.105
           architecture: x64
-      - name: Install LibreWPF's pinned SDK
+      - name: Show the pinned .NET 11 RC2 SDK
         shell: bash
-        run: ./LibreWPF/eng/common/dotnet.sh --info
+        run: dotnet --info
+      - name: Expose the pinned SDK to LibreWPF canonical tools
+        shell: bash
+        run: |
+          ln -s "$(dirname "$(command -v dotnet)")" LibreWPF/.dotnet
+          LibreWPF/.dotnet/dotnet --info
       - name: Build the Windows native payloads
         shell: bash
         run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 ./dist.local.sh
@@ -61,10 +66,19 @@ jobs:
           git submodule update --init --force --recursive
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          # RC2 builds the packages. Keep .NET 10 installed as well: the
+          # package contract must remain consumable by the released SDK.
+          dotnet-version: |
+            11.0.100-rc.2.26504.105
+            10.0.x
           architecture: arm64
-      - name: Install LibreWPF's pinned SDK
-        run: ./LibreWPF/eng/common/dotnet.sh --info
+      - name: Show the pinned .NET 11 RC2 SDK
+        run: dotnet --info
+      - name: Expose the pinned SDK to LibreWPF canonical tools
+        shell: bash
+        run: |
+          ln -s "$(dirname "$(command -v dotnet)")" LibreWPF/.dotnet
+          LibreWPF/.dotnet/dotnet --info
       - name: Download the Windows native payloads
         uses: actions/download-artifact@v4
         with:
@@ -107,6 +121,76 @@ jobs:
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
           DIST_LOCAL_FORCE: '1'
         run: ./dist.local.sh
+      - name: Verify LibreWPF.Sdk remains consumable by .NET 10
+        shell: bash
+        env:
+          DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
+        run: |
+          consumer_dir="${RUNNER_TEMP}/librewpf-net10-consumer"
+          mkdir -p "${consumer_dir}"
+          shopt -s nullglob
+          sdk_packages=("${DIST_LOCAL_FEED}"/LibreWPF.Sdk.[0-9]*.nupkg)
+          if [[ ${#sdk_packages[@]} -ne 1 ]]; then
+            echo "Expected one LibreWPF.Sdk package in ${DIST_LOCAL_FEED}, found ${#sdk_packages[@]}." >&2
+            exit 1
+          fi
+          sdk_package_name="$(basename "${sdk_packages[0]}")"
+          sdk_package_version="${sdk_package_name#LibreWPF.Sdk.}"
+          sdk_package_version="${sdk_package_version%.nupkg}"
+          cat > "${consumer_dir}/global.json" <<'EOF'
+          {
+            "sdk": {
+              "version": "10.0.100",
+              "rollForward": "latestFeature"
+            }
+          }
+          EOF
+          cat > "${consumer_dir}/NuGet.Config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="librewpf-local" value="${DIST_LOCAL_FEED}" />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+          cat > "${consumer_dir}/Net10Consumer.csproj" <<EOF
+          <Project Sdk="LibreWPF.Sdk/${sdk_package_version}">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0-windows</TargetFramework>
+              <UseWPF>true</UseWPF>
+              <EnableWindowsTargeting>true</EnableWindowsTargeting>
+            </PropertyGroup>
+          </Project>
+          EOF
+          cat > "${consumer_dir}/Program.cs" <<'EOF'
+          using System;
+
+          internal static class Program
+          {
+              [STAThread]
+              private static void Main()
+              {
+              }
+          }
+          EOF
+          (
+            cd "${consumer_dir}"
+            consumer_sdk_version="$(dotnet --version)"
+            case "${consumer_sdk_version}" in
+              10.*) ;;
+              *) echo "Expected the .NET 10 SDK consumer, got ${consumer_sdk_version}." >&2; exit 1 ;;
+            esac
+            NUGET_PACKAGES="${consumer_dir}/packages" \
+              dotnet build Net10Consumer.csproj --configfile NuGet.Config -v:minimal
+            restored_metadata="${consumer_dir}/packages/librewpf.sdk/${sdk_package_version}/.nupkg.metadata"
+            if [[ ! -f "${restored_metadata}" ]] || ! grep -Fq "${DIST_LOCAL_FEED}" "${restored_metadata}"; then
+              echo "LibreWPF.Sdk was not restored from this run's local feed." >&2
+              exit 1
+            fi
+          )
       - name: Publish the package closure to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ github.token }}
