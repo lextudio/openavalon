@@ -1,0 +1,66 @@
+name: Publish LibreWPF GitHub Packages
+
+# This is deliberately macOS ARM64 only. It publishes the same package versions as nuget.org,
+# but with the macOS runtime closure built from this OpenAvalon revision so OpenDevelop's macOS
+# CI can opt into it without changing the Windows/public package lane.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: macOS ARM64 package closure
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          architecture: arm64
+      - name: Install LibreWPF's pinned SDK
+        run: ./LibreWPF/eng/common/dotnet.sh --info
+      - name: Build the ProGPU macOS ARM64 native payload
+        run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
+      - name: Build the macOS ARM64 package closure
+        env:
+          DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
+          DIST_LOCAL_FORCE: '1'
+        run: ./dist.local.sh
+      - name: Publish the package closure to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
+        run: |
+          shopt -s nullglob
+          packages=("${DIST_LOCAL_FEED}"/*.0.1.0-preview.69.nupkg)
+          if [[ ${#packages[@]} -eq 0 ]]; then
+            echo "No 0.1.0-preview.69 packages were produced." >&2
+            exit 1
+          fi
+          required=(
+            LibreWPF.Interop LibreWPF.ProGPU LibreWPF.Sdk LibreWPF.Transport
+            LibreWinForms.ProGPU LibreWinForms.Sdk LibreWinForms.System.Windows.Forms LibreWinForms.WindowsFormsIntegration
+            ProGPU.Avalonia ProGPU.Backend ProGPU.Backend.Dawn ProGPU.Backend.Native ProGPU.Compute
+            ProGPU.DirectX ProGPU.Layout ProGPU.Media ProGPU.Media.Scene ProGPU.Scene ProGPU.SkiaSharp
+            ProGPU.System.Drawing.Common ProGPU.Text ProGPU.Text.Shaping ProGPU.Transpiler ProGPU.Vector
+            ProGPU.Virtualization ProGPU.WinRT ProGPU.WinUI
+          )
+          for id in "${required[@]}"; do
+            if [[ ! -f "${DIST_LOCAL_FEED}/${id}.0.1.0-preview.69.nupkg" ]]; then
+              echo "Missing required package ${id}.0.1.0-preview.69.nupkg" >&2
+              exit 1
+            fi
+          done
+          for package in "${packages[@]}"; do
+            dotnet nuget push "${package}" \
+              --source https://nuget.pkg.github.com/lextudio/index.json \
+              --api-key "${GITHUB_TOKEN}" \
+              --skip-duplicate
+          done
