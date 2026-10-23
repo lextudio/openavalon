@@ -18,8 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+      - name: Initialize nested submodules with long paths
+        shell: bash
+        run: |
+          git config --global core.longpaths true
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
@@ -47,8 +52,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+      - name: Initialize nested submodules
+        shell: bash
+        run: |
+          git config --global core.longpaths true
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
