@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           ln -s "$(dirname "$(command -v dotnet)")" LibreWPF/.dotnet
-          LibreWPF/.dotnet/dotnet --info
+          test -e LibreWPF/.dotnet/dotnet || test -e LibreWPF/.dotnet/dotnet.exe
       - name: Build the Windows native payloads
         shell: bash
         run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 ./dist.local.sh
@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: |
           ln -s "$(dirname "$(command -v dotnet)")" LibreWPF/.dotnet
-          LibreWPF/.dotnet/dotnet --info
+          test -e LibreWPF/.dotnet/dotnet || test -e LibreWPF/.dotnet/dotnet.exe
       - name: Download the Windows native payloads
         uses: actions/download-artifact@v4
         with:
