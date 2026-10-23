@@ -41,6 +41,7 @@ case "$(uname -s)" in
   *) host_platform=all ;;
 esac
 target_platform="${DIST_LOCAL_TARGET_PLATFORM:-${host_platform}}"
+stage_native_only="${DIST_LOCAL_STAGE_NATIVE_ONLY:-0}"
 
 # Expensive stages whose inputs have not changed since their last successful run are skipped
 # (see "Stage receipts" below). --force, or DIST_LOCAL_FORCE=1, rebuilds everything.
@@ -101,6 +102,14 @@ if [[ "${target_platform}" != "all" && "${target_platform}" != "macos" && "${tar
   echo "DIST_LOCAL_TARGET_PLATFORM must be 'windows', 'macos', or 'all'." >&2
   exit 1
 fi
+if [[ "${stage_native_only}" != "0" && "${stage_native_only}" != "1" ]]; then
+  echo "DIST_LOCAL_STAGE_NATIVE_ONLY must be '0' or '1'." >&2
+  exit 1
+fi
+if [[ "${stage_native_only}" == "1" && "${target_platform}" != "windows" ]]; then
+  echo "DIST_LOCAL_STAGE_NATIVE_ONLY is supported only by the Windows lane." >&2
+  exit 1
+fi
 
 # A Windows-only feed deliberately validates and publishes win-x64 and
 # win-arm64 native payloads, without claiming that Linux/macOS assets exist.
@@ -108,21 +117,23 @@ fi
 if [[ "${target_platform}" == "windows" ]]; then
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-1}"
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-true}"
-  # MSBuild's /m switch does not constrain cl.exe's own /MP workers.  The
-  # System.Printing PCH is large enough to exhaust this workstation otherwise.
-  export CL="${CL:-} /MP1"
-  # dotnet msbuild does not discover Visual C++ targets by itself.  Supply the
-  # installed VS targets so LibreWPF's native projects can restore and build.
-  if [[ -z "${VCTargetsPath:-}" ]]; then
-    vs_vc_targets='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Microsoft/VC/v180'
-    if [[ -f "${vs_vc_targets}/Microsoft.Cpp.Default.props" ]]; then
-      export VCTargetsPath="$(cygpath -w "${vs_vc_targets}")\\"
+  if [[ "${stage_native_only}" != "1" ]]; then
+    # MSBuild's /m switch does not constrain cl.exe's own /MP workers.  The
+    # System.Printing PCH is large enough to exhaust this workstation otherwise.
+    export CL="${CL:-} /MP1"
+    # dotnet msbuild does not discover Visual C++ targets by itself.  Supply the
+    # installed VS targets so LibreWPF's native projects can restore and build.
+    if [[ -z "${VCTargetsPath:-}" ]]; then
+      vs_vc_targets='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Microsoft/VC/v180'
+      if [[ -f "${vs_vc_targets}/Microsoft.Cpp.Default.props" ]]; then
+        export VCTargetsPath="$(cygpath -w "${vs_vc_targets}")\\"
+      fi
     fi
-  fi
-  wpf_msbuild='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe'
-  if [[ ! -x "${wpf_msbuild}" ]]; then
-    echo "Visual Studio MSBuild.exe is required for LibreWPF validation graphs." >&2
-    exit 1
+    wpf_msbuild='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe'
+    if [[ ! -x "${wpf_msbuild}" ]]; then
+      echo "Visual Studio MSBuild.exe is required for LibreWPF validation graphs." >&2
+      exit 1
+    fi
   fi
 else
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-0}"
@@ -414,7 +425,7 @@ if [[ "${target_platform}" == "windows" ]]; then
     pwsh -NoProfile -File "${progpu_root}/eng/build-progpu-native-windows.ps1" \
       -Rid "${rid}" \
       -Compiler MSVC \
-      -BuildOnly
+      -BenchmarkProfile Smoke
     for staged in "${native_staged[@]}"; do
       if [[ ! -s "${staged}" ]]; then
         echo "The ProGPU native staging step did not produce ${rid}/$(basename "${staged}")." >&2
@@ -520,6 +531,12 @@ if [[ "${target_platform}" == "windows" ]]; then
   done
 fi
 
+if [[ "${stage_native_only}" == "1" ]]; then
+  section "Windows native payload staging complete"
+  publish_succeeded=1
+  exit 0
+fi
+
 # The feed accumulates versions on purpose so older pins keep restoring, but a re-run of the
 # same version must not trip the package-group verifier: progpu-verify-packages.sh scans the
 # output directory for artifacts of the version being built and rejects any package the
@@ -549,7 +566,12 @@ fi
 # packages it published last time are then still in the feed and are left exactly as they are.
 progpu_package_group="${PROGPU_PACKAGE_GROUP:-$([[ "${target_platform}" == "macos" ]] && echo opendevelop-macos || echo portable)}"
 if [[ "${target_platform}" == "macos" ]]; then
-  progpu_native_payloads=("${progpu_root}/artifacts/progpu-native/package/runtimes/osx-arm64/native")
+  # The macOS publisher combines the downloaded Windows native/DX12 trees with
+  # its locally built osx-arm64 payload. Fingerprint all of them so a changed
+  # Windows artifact cannot be hidden behind a reusable macOS pack receipt.
+  progpu_native_payloads=(
+    "${progpu_root}/artifacts/progpu-native/package"
+    "${progpu_root}/artifacts/progpu-dx12/package")
 else
   progpu_native_payloads=("${progpu_root}/artifacts/progpu-native/package" "${progpu_root}/artifacts/progpu-dx12/package")
 fi

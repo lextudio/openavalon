@@ -1,8 +1,8 @@
 name: Publish LibreWPF GitHub Packages
 
-# This is deliberately macOS ARM64 only. It publishes the same package versions as nuget.org,
-# but with the macOS runtime closure built from this OpenAvalon revision so OpenDevelop's macOS
-# CI can opt into it without changing the Windows/public package lane.
+# Publish one Windows-and-macOS closure at the same versions as nuget.org. Linux is deliberately
+# absent: the Windows job stages win-x64/win-arm64 payloads, and the macOS job adds osx-arm64
+# before it creates the packages.
 on:
   workflow_dispatch:
 
@@ -11,9 +11,38 @@ permissions:
   packages: write
 
 jobs:
+  stage-windows-native:
+    name: Stage Windows native payloads
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          architecture: x64
+      - name: Install LibreWPF's pinned SDK
+        shell: bash
+        run: ./LibreWPF/eng/common/dotnet.sh --info
+      - name: Build the Windows native payloads
+        shell: bash
+        run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 ./dist.local.sh
+      - name: Upload Windows native payloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: progpu-native-windows
+          if-no-files-found: error
+          path: |
+            LibreWPF/external/ProGPU/artifacts/progpu-native/package
+            LibreWPF/external/ProGPU/artifacts/progpu-dx12/package
+
   publish:
-    name: macOS ARM64 package closure
+    name: Windows and macOS package closure
     runs-on: macos-15
+    needs: stage-windows-native
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +55,43 @@ jobs:
           architecture: arm64
       - name: Install LibreWPF's pinned SDK
         run: ./LibreWPF/eng/common/dotnet.sh --info
+      - name: Download the Windows native payloads
+        uses: actions/download-artifact@v4
+        with:
+          name: progpu-native-windows
+          path: LibreWPF/external/ProGPU/artifacts
       - name: Build the ProGPU macOS ARM64 native payload
         run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
+      - name: Verify the supported native payloads
+        shell: bash
+        run: |
+          native_root=LibreWPF/external/ProGPU/artifacts/progpu-native/package/runtimes
+          dx12_root=LibreWPF/external/ProGPU/artifacts/progpu-dx12/package
+          for path in \
+            win-x64/native/progpu_native.dll \
+            win-x64/native/progpu_native_dawn.dll \
+            win-x64/native/progpu_native_direct2d.dll \
+            win-arm64/native/progpu_native.dll \
+            win-arm64/native/progpu_native_dawn.dll \
+            win-arm64/native/progpu_native_direct2d.dll \
+            osx-arm64/native/libprogpu_native.dylib \
+            osx-arm64/native/libprogpu_native_dawn.dylib; do
+            test -s "${native_root}/${path}"
+          done
+          for rid in win-x64 win-arm64; do
+            for name in wgpu_native.dll dxcompiler.dll dxil.dll; do
+              test -s "${dx12_root}/${rid}/native/${name}"
+            done
+          done
+          for excluded_rid in linux-x64 linux-arm64 osx-x64; do
+            test ! -e "${native_root}/${excluded_rid}"
+          done
+          for path in win-x64/native/progpu_native.dll win-x64/native/progpu_native_dawn.dll win-x64/native/progpu_native_direct2d.dll; do
+            file "${native_root}/${path}" | grep -Eq 'x86-64|x86_64'
+          done
+          for path in win-arm64/native/progpu_native.dll win-arm64/native/progpu_native_dawn.dll win-arm64/native/progpu_native_direct2d.dll; do
+            file "${native_root}/${path}" | grep -Eqi 'Aarch64|ARM64'
+          done
       - name: Build the macOS ARM64 package closure
         env:
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
@@ -36,6 +100,7 @@ jobs:
       - name: Publish the package closure to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
         run: |
           shopt -s nullglob
@@ -44,23 +109,69 @@ jobs:
             echo "No 0.1.0-preview.69 packages were produced." >&2
             exit 1
           fi
+          version_package="${DIST_LOCAL_FEED}/LibreWPF.Interop."*.nupkg
+          if [[ ! -f "${version_package}" ]]; then
+            echo "Unable to derive the package version from LibreWPF.Interop." >&2
+            exit 1
+          fi
+          package_version="${version_package#${DIST_LOCAL_FEED}/LibreWPF.Interop.}"
+          package_version="${package_version%.nupkg}"
           required=(
             LibreWPF.Interop LibreWPF.ProGPU LibreWPF.Sdk LibreWPF.Transport
             LibreWinForms.ProGPU LibreWinForms.Sdk LibreWinForms.System.Windows.Forms LibreWinForms.WindowsFormsIntegration
-            ProGPU.Avalonia ProGPU.Backend ProGPU.Backend.Dawn ProGPU.Backend.Native ProGPU.Compute
+            ProGPU.Avalonia ProGPU.Backend ProGPU.Backend.Dawn ProGPU.Backend.Dx12 ProGPU.Backend.Native ProGPU.Native.Sdk ProGPU.Compute
             ProGPU.DirectX ProGPU.Layout ProGPU.Media ProGPU.Media.Scene ProGPU.Scene ProGPU.SkiaSharp
             ProGPU.System.Drawing.Common ProGPU.Text ProGPU.Text.Shaping ProGPU.Transpiler ProGPU.Vector
             ProGPU.Virtualization ProGPU.WinRT ProGPU.WinUI
           )
           for id in "${required[@]}"; do
-            if [[ ! -f "${DIST_LOCAL_FEED}/${id}.0.1.0-preview.69.nupkg" ]]; then
-              echo "Missing required package ${id}.0.1.0-preview.69.nupkg" >&2
+            if [[ ! -f "${DIST_LOCAL_FEED}/${id}.${package_version}.nupkg" ]]; then
+              echo "Missing required package ${id}.${package_version}.nupkg" >&2
               exit 1
             fi
           done
+          deleted_packages=()
+          missing_package_names=()
+          publish_failed() {
+            if [[ ${#deleted_packages[@]} -gt 0 ]]; then
+              echo "Package replacement failed after deleting: ${deleted_packages[*]}. Re-run this workflow to restore the complete preview closure." >&2
+            fi
+          }
+          trap publish_failed ERR
+          # GitHub Packages versions are immutable. Replace only the package
+          # IDs produced by this run at the public preview version, so this
+          # feed cannot silently retain a prior macOS-only closure.
           for package in "${packages[@]}"; do
-            dotnet nuget push "${package}" \
+            package_name="$(basename "${package}" .${package_version}.nupkg)"
+            error_file="$(mktemp -t progpu-package-query)"
+            if ! version_ids="$(gh api --paginate \
+              "/orgs/lextudio/packages/nuget/${package_name}/versions?per_page=100" \
+              --jq '.[] | select(.name == "'"${package_version}"'") | .id' 2>"${error_file}")"; then
+              if grep -q 'HTTP 404' "${error_file}"; then
+                rm -f "${error_file}"
+                missing_package_names+=("${package_name}")
+                continue
+              fi
+              cat "${error_file}" >&2
+              rm -f "${error_file}"
+              exit 1
+            fi
+            rm -f "${error_file}"
+            for version_id in ${version_ids}; do
+              gh api --method DELETE \
+                "/orgs/lextudio/packages/nuget/${package_name}/versions/${version_id}"
+              deleted_packages+=("${package_name}")
+            done
+          done
+          for package in "${packages[@]}"; do
+            if ! dotnet nuget push "${package}" \
               --source https://nuget.pkg.github.com/lextudio/index.json \
-              --api-key "${GITHUB_TOKEN}" \
-              --skip-duplicate
+              --api-key "${GITHUB_TOKEN}"; then
+              package_name="$(basename "${package}" .${package_version}.nupkg)"
+              if [[ " ${missing_package_names[*]} " == *" ${package_name} "* ]]; then
+                echo "${package_name} returned 404 when queried but conflicts on upload; grant this workflow package access, then rerun." >&2
+              fi
+              publish_failed
+              exit 1
+            fi
           done
