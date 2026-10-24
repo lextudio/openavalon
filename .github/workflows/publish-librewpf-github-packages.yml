@@ -100,6 +100,8 @@ jobs:
           path: LibreWPF/external/ProGPU/artifacts
       - name: Build the ProGPU macOS ARM64 native payload
         run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
+      - name: Aggregate native package input diagnostics
+        run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 osx-arm64
       - name: Verify the supported native payloads
         shell: bash
         run: |

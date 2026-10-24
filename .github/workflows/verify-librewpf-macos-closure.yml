@@ -1,0 +1,73 @@
+name: Verify LibreWPF macOS Package Closure
+
+# Fast repair lane: consumes artifacts from a successful Windows staging run,
+# builds the macOS slice and verifies the closure without publishing packages.
+# Linux is intentionally absent.
+on:
+  workflow_dispatch:
+    inputs:
+      windows_run_id:
+        description: Successful Publish LibreWPF GitHub Packages run containing both Windows artifacts
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-macos-closure:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Initialize nested submodules
+        shell: bash
+        run: |
+          git config --global core.longpaths true
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            11.0.100-rc.2.26504.105
+            10.0.x
+          architecture: arm64
+      - name: Expose the pinned SDK to LibreWPF canonical tools
+        shell: bash
+        run: |
+          ln -s "$(dirname "$(command -v dotnet)")" LibreWPF/.dotnet
+          test -e LibreWPF/.dotnet/dotnet || test -e LibreWPF/.dotnet/dotnet.exe
+      - name: Download Windows native payloads from the selected run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.windows_run_id }}
+          pattern: progpu-native-windows-*
+          merge-multiple: true
+          path: LibreWPF/external/ProGPU/artifacts
+      - name: Verify both staged Windows inputs
+        shell: bash
+        run: |
+          native_root=LibreWPF/external/ProGPU/artifacts/progpu-native/package/runtimes
+          dx12_root=LibreWPF/external/ProGPU/artifacts/progpu-dx12/package
+          for rid in win-x64 win-arm64; do
+            for name in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
+              test -s "${native_root}/${rid}/native/${name}"
+            done
+            for name in wgpu_native.dll dxcompiler.dll dxil.dll; do
+              test -s "${dx12_root}/${rid}/native/${name}"
+            done
+          done
+      - name: Build the macOS ARM64 native payload
+        run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
+      - name: Aggregate native package input diagnostics
+        run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 osx-arm64
+      - name: Build and verify the macOS package closure without publishing
+        env:
+          DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-macos-verify-feed
+          DIST_LOCAL_FORCE: '1'
+        run: ./dist.local.sh
