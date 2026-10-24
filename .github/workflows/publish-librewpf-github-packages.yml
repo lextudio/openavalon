@@ -14,6 +14,11 @@ on:
       - LibreWPF
   workflow_dispatch:
 
+# Two closures publishing the same versions would race on upload; queue them.
+concurrency:
+  group: publish-librewpf-github-packages
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
@@ -56,6 +61,16 @@ jobs:
           $expected = '${{ matrix.rid }}'.Replace('win-', '')
           $actual = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
           if ($actual -ne $expected) { throw "Expected $expected PowerShell, found $actual." }
+      # Pinned, hash-verified downloads only (the DX12 scripts verify them on
+      # every run). Caching them removes most of the network exposure of a
+      # 30-minute job; FreeType stays in a fresh workspace by design.
+      - name: Cache pinned DX12 downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            LibreWPF/external/ProGPU/artifacts/progpu-dx12/download/${{ matrix.rid }}
+            LibreWPF/external/ProGPU/artifacts/wgpu-native-windows/${{ matrix.rid }}
+          key: progpu-dx12-downloads-${{ matrix.rid }}-${{ hashFiles('LibreWPF/external/ProGPU/eng/wgpu-dxc/**') }}
       - name: Build the Windows native payload
         shell: bash
         # The ProGPU script resolves dumpbin.exe from this runner's selected
