@@ -34,6 +34,8 @@ jobs:
         run: dotnet --info
       - name: Build the Windows native payloads
         shell: bash
+        # The ProGPU script resolves dumpbin.exe from this runner's selected
+        # VS installation if the VS 2026 developer shell omits it from PATH.
         run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 ./dist.local.sh
       - name: Upload Windows native payloads
         uses: actions/upload-artifact@v4
