@@ -42,6 +42,7 @@ case "$(uname -s)" in
 esac
 target_platform="${DIST_LOCAL_TARGET_PLATFORM:-${host_platform}}"
 stage_native_only="${DIST_LOCAL_STAGE_NATIVE_ONLY:-0}"
+windows_rids=(win-x64 win-arm64)
 
 # Expensive stages whose inputs have not changed since their last successful run are skipped
 # (see "Stage receipts" below). --force, or DIST_LOCAL_FORCE=1, rebuilds everything.
@@ -121,6 +122,17 @@ fi
 if [[ "${stage_native_only}" == "1" && "${target_platform}" != "windows" ]]; then
   echo "DIST_LOCAL_STAGE_NATIVE_ONLY is supported only by the Windows lane." >&2
   exit 1
+fi
+if [[ -n "${DIST_LOCAL_WINDOWS_RIDS:-}" ]]; then
+  if [[ "${target_platform}" != "windows" || "${stage_native_only}" != "1" ]]; then
+    echo "DIST_LOCAL_WINDOWS_RIDS is supported only by Windows native-payload staging." >&2
+    exit 1
+  fi
+  windows_rids=(${DIST_LOCAL_WINDOWS_RIDS//,/ })
+  if [[ ${#windows_rids[@]} -ne 1 ]] || [[ "${windows_rids[0]}" != "win-x64" && "${windows_rids[0]}" != "win-arm64" ]]; then
+    echo "DIST_LOCAL_WINDOWS_RIDS must select exactly one of win-x64 or win-arm64." >&2
+    exit 1
+  fi
 fi
 
 # A Windows-only feed deliberately validates and publishes win-x64 and
@@ -414,7 +426,7 @@ EOF
 # earlier developer build's artifacts/progpu-native tree.
 if [[ "${target_platform}" == "windows" ]]; then
   section "Staging ProGPU native Windows runtimes"
-  for rid in win-x64 win-arm64; do
+  for rid in "${windows_rids[@]}"; do
     native_stage="native-${rid}"
     native_staged=()
     for native_dll in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
@@ -465,7 +477,7 @@ if [[ "${target_platform}" == "windows" ]]; then
   # when present and no explicit override is given.
   tools_root="${repo_root}/artifacts/tools"
   section "Staging ProGPU DX12 Windows runtimes (host ${host_native_arch:-unknown})"
-  for rid in win-x64 win-arm64; do
+  for rid in "${windows_rids[@]}"; do
     arch="${rid#win-}"
     arch_upper="$(tr '[:lower:]' '[:upper:]' <<<"${arch}")"
     tool_rustup="${tools_root}/rustup-${arch}"

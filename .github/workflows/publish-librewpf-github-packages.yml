@@ -12,8 +12,18 @@ permissions:
 
 jobs:
   stage-windows-native:
-    name: Stage Windows native payloads
-    runs-on: windows-2025
+    name: Stage ${{ matrix.rid }} native payloads
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+            dotnet_architecture: x64
+          - rid: win-arm64
+            runner: windows-11-arm
+            dotnet_architecture: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -28,19 +38,25 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 11.0.100-rc.2.26504.105
-          architecture: x64
+          architecture: ${{ matrix.dotnet_architecture }}
       - name: Show the pinned .NET 11 RC2 SDK
         shell: bash
         run: dotnet --info
-      - name: Build the Windows native payloads
+      - name: Verify the native runner architecture
+        shell: pwsh
+        run: |
+          $expected = '${{ matrix.rid }}'.Replace('win-', '')
+          $actual = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Expected $expected PowerShell, found $actual." }
+      - name: Build the Windows native payload
         shell: bash
         # The ProGPU script resolves dumpbin.exe from this runner's selected
         # VS installation if the VS 2026 developer shell omits it from PATH.
-        run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 ./dist.local.sh
-      - name: Upload Windows native payloads
+        run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 DIST_LOCAL_WINDOWS_RIDS=${{ matrix.rid }} ./dist.local.sh
+      - name: Upload Windows native payload
         uses: actions/upload-artifact@v4
         with:
-          name: progpu-native-windows
+          name: progpu-native-windows-${{ matrix.rid }}
           if-no-files-found: error
           path: |
             LibreWPF/external/ProGPU/artifacts/progpu-native/package
@@ -79,7 +95,8 @@ jobs:
       - name: Download the Windows native payloads
         uses: actions/download-artifact@v4
         with:
-          name: progpu-native-windows
+          pattern: progpu-native-windows-*
+          merge-multiple: true
           path: LibreWPF/external/ProGPU/artifacts
       - name: Build the ProGPU macOS ARM64 native payload
         run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
