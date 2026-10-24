@@ -4,6 +4,14 @@ name: Publish LibreWPF GitHub Packages
 # absent: the Windows job stages win-x64/win-arm64 payloads, and the macOS job adds osx-arm64
 # before it creates the packages.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-librewpf-github-packages.yml
+      - .gitmodules
+      - dist.local.sh
+      - LibreWPF
   workflow_dispatch:
 
 permissions:
