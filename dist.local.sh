@@ -432,11 +432,16 @@ if [[ "${target_platform}" == "windows" ]]; then
     for native_dll in progpu_native.dll progpu_native_dawn.dll progpu_native_direct2d.dll; do
       native_staged+=("${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/${native_dll}")
     done
+    native_staged+=(
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu-native-font-dependency.json"
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu_native_freetype.lib"
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/licenses/freetype/NOTICE.txt")
     # The renderer is compiled from src/ProGPU.Native; the builder script pins wgpu-native and the
     # headers itself, and the export list is the managed/native contract.
     native_fingerprint="$({ echo "${rid} MSVC"
-      repo_fingerprint "${progpu_root}" src/ProGPU.Native eng/build-progpu-native-windows.ps1 eng/progpu-native-exports.txt \
-        eng/progpu-native-wgpu.version.json
+      repo_fingerprint "${progpu_root}" src/ProGPU.Native eng/build-progpu-native-windows.ps1 \
+        eng/progpu-prepare-freetype-windows.ps1 eng/progpu-prepare-freetype.py eng/progpu-verify-freetype.py \
+        eng/native-freetype.json eng/progpu-native-exports.txt eng/progpu-native-wgpu.version.json
     } | sha256_stdin)"
     if stage_is_current "${native_stage}" "${native_fingerprint}"; then
       continue
@@ -446,10 +451,23 @@ if [[ "${target_platform}" == "windows" ]]; then
     # retain a compiler choice from an interactive ClangCL attempt; this feed
     # explicitly uses the installed MSVC toolchain, so do not reuse that cache.
     rm -rf "${progpu_root}/artifacts/progpu-native/build-${rid}"
+    # FreeType is an admitted external producer, so prepare it in a fresh workspace
+    # outside the checkout. The native builder verifies it after compilation and only
+    # then stages its receipt, library and notices into the RID payload.
+    font_workspace="$(mktemp -d "${TMPDIR:-/tmp}/progpu-freetype-${rid}.XXXXXX")"
+    pwsh -NoProfile -File "${progpu_root}/eng/progpu-prepare-freetype-windows.ps1" \
+      -Rid "${rid}" \
+      -Workspace "$(env_path "${font_workspace}")"
+    font_manifest="${font_workspace}/install/progpu-freetype.json"
+    if [[ ! -s "${font_manifest}" ]]; then
+      echo "The FreeType producer did not write ${font_manifest}." >&2
+      exit 1
+    fi
     pwsh -NoProfile -File "${progpu_root}/eng/build-progpu-native-windows.ps1" \
       -Rid "${rid}" \
       -Compiler MSVC \
-      -BenchmarkProfile Smoke
+      -BenchmarkProfile Smoke \
+      -FontManifest "$(env_path "${font_manifest}")"
     for staged in "${native_staged[@]}"; do
       if [[ ! -s "${staged}" ]]; then
         echo "The ProGPU native staging step did not produce ${rid}/$(basename "${staged}")." >&2
@@ -460,6 +478,7 @@ if [[ "${target_platform}" == "windows" ]]; then
     # The CMake tree is only an intermediate: it is deleted before every rebuild (above), never
     # reused, and the receipt lists the staged package/ files instead. ~250 MB per RID.
     rm -rf "${progpu_root}/artifacts/progpu-native/build-${rid}"
+    rm -rf "${font_workspace}"
   done
 
   # ProGPU.Backend.Dx12 carries a separately-built WGPU/DXC runtime.  Its
