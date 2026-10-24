@@ -121,8 +121,25 @@ jobs:
           pattern: progpu-native-windows-*
           merge-multiple: true
           path: LibreWPF/external/ProGPU/artifacts
+      # The package preflight requires the FreeType and private EDIT ICU inputs
+      # for every RID, so build them exactly as ProGPU's own release does.
       - name: Build the ProGPU macOS ARM64 native payload
-        run: ./LibreWPF/external/ProGPU/eng/build-progpu-native.sh --build-only --rid osx-arm64
+        shell: bash
+        run: |
+          progpu=LibreWPF/external/ProGPU
+          # The FreeType producer verifies the release signature with gpg.
+          command -v gpg >/dev/null || brew install gnupg
+          workspace="$(mktemp -d "${RUNNER_TEMP}/progpu-native-inputs.XXXXXXXX")"
+          workspace="$(cd "${workspace}" && pwd -P)"
+          python3 "${progpu}/eng/progpu-prepare-freetype.py" \
+            --workspace "${workspace}/freetype" --rid osx-arm64 --cc clang --cxx clang++ \
+            --test-font /System/Library/Fonts/Supplemental/Arial.ttf
+          icu_archive="$(python3 tools/fetch-progpu-edit-word-icu.py "${progpu}" "${workspace}/edit-icu")"
+          # The builder accepts dependency inputs only before --build-only.
+          "${progpu}/eng/build-progpu-native.sh" \
+            --font-manifest "${workspace}/freetype/install/progpu-freetype.json" \
+            --edit-word-icu-archive "${icu_archive}" \
+            --build-only --rid osx-arm64
       - name: Aggregate native package input diagnostics
         run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 osx-arm64
       - name: Verify the supported native payloads

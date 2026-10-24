@@ -8,6 +8,10 @@ wpf_root="${repo_root}/LibreWPF"
 progpu_root="${wpf_root}/external/ProGPU"
 winforms_root="${wpf_root}/external/LibreWinForms"
 
+# Windows runners expose "python"; "python3" may be the Store stub there.
+python_cmd=python3
+if ! python3 -c 'import sys' >/dev/null 2>&1; then python_cmd=python; fi
+
 # ProGPU's package list and MSBuild props resolve the framework projects it packs
 # (LibreWPF.Interop, System.Drawing.Common) from these roots, and default to
 # directories under ProGPU itself that do not exist in this layout.
@@ -435,13 +439,17 @@ if [[ "${target_platform}" == "windows" ]]; then
     native_staged+=(
       "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu-native-font-dependency.json"
       "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu_native_freetype.lib"
-      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/licenses/freetype/NOTICE.txt")
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/licenses/freetype/NOTICE.txt"
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu-native-edit-word-dependency.json"
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/sdk/progpu_native_edit_icu.lib"
+      "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}/native/licenses/edit-word-icu/LICENSE")
     # The renderer is compiled from src/ProGPU.Native; the builder script pins wgpu-native and the
     # headers itself, and the export list is the managed/native contract.
     native_fingerprint="$({ echo "${rid} MSVC"
       repo_fingerprint "${progpu_root}" src/ProGPU.Native eng/build-progpu-native-windows.ps1 \
         eng/progpu-prepare-freetype-windows.ps1 eng/progpu-prepare-freetype.py eng/progpu-verify-freetype.py \
-        eng/native-freetype.json eng/progpu-native-exports.txt eng/progpu-native-wgpu.version.json
+        eng/native-freetype.json eng/progpu-native-exports.txt eng/progpu-native-wgpu.version.json \
+        eng/native-edit-word-icu.json eng/progpu-edit-word-icu-dependency.py eng/progpu-embed-edit-word-icu-data.py
     } | sha256_stdin)"
     if stage_is_current "${native_stage}" "${native_fingerprint}"; then
       continue
@@ -470,11 +478,16 @@ if [[ "${target_platform}" == "windows" ]]; then
       echo "The FreeType producer did not write ${font_manifest}." >&2
       exit 1
     fi
+    # The private EDIT word-boundary ICU is built from ProGPU's pinned, hash-checked source
+    # archive; without it the package preflight rejects every RID.
+    edit_icu_archive="$("${python_cmd}" "$(env_path "${repo_root}/tools/fetch-progpu-edit-word-icu.py")" \
+      "$(env_path "${progpu_root}")" "$(env_path "${font_workspace}/edit-icu")" | tr -d '\r')"
     pwsh -NoProfile -File "${progpu_root}/eng/build-progpu-native-windows.ps1" \
       -Rid "${rid}" \
       -Compiler MSVC \
       -BenchmarkProfile Smoke \
-      -FontManifest "$(env_path "${font_manifest}")"
+      -FontManifest "$(env_path "${font_manifest}")" \
+      -EditWordIcuArchive "${edit_icu_archive}"
     for staged in "${native_staged[@]}"; do
       if [[ ! -s "${staged}" ]]; then
         echo "The ProGPU native staging step did not produce ${rid}/$(basename "${staged}")." >&2
