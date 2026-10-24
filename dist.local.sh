@@ -454,7 +454,14 @@ if [[ "${target_platform}" == "windows" ]]; then
     # FreeType is an admitted external producer, so prepare it in a fresh workspace
     # outside the checkout. The native builder verifies it after compilation and only
     # then stages its receipt, library and notices into the RID payload.
-    font_workspace="$(mktemp -d "${TMPDIR:-/tmp}/progpu-freetype-${rid}.XXXXXX")"
+    # Git for Windows maps /tmp through a junction on hosted runners. The
+    # producer deliberately rejects junction ancestors, so use Actions'
+    # physical runner temp root when it is available.
+    font_workspace_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+    if command -v cygpath >/dev/null 2>&1; then
+      font_workspace_root="$(cygpath -u "${font_workspace_root}")"
+    fi
+    font_workspace="$(mktemp -d "${font_workspace_root%/}/progpu-freetype-${rid}.XXXXXX")"
     pwsh -NoProfile -File "${progpu_root}/eng/progpu-prepare-freetype-windows.ps1" \
       -Rid "${rid}" \
       -Workspace "$(env_path "${font_workspace}")"
