@@ -3,7 +3,8 @@
 # build output (for example OpenDevelop's bin), so a one-file change can be tried in minutes
 # instead of a full dist.local.sh. This is for local iteration ONLY - it never touches the feed,
 # and the next restore/build of the consumer from the feed replaces the overlaid files. Publish
-# with dist.local.sh once the change is right.
+# with dist.local.sh once the change is right. To try a fix through a consumer's project-local feed
+# (OpenDevelop's artifacts/openavalon-feed) use ./dev-patch-feed.sh instead.
 #
 #   ./dev-overlay.sh <consumer-bin-dir> <AssemblyName>...   overlay (e.g. PresentationCore)
 #   ./dev-overlay.sh --restore <consumer-bin-dir>           put the original files back

@@ -75,6 +75,28 @@ It builds the named LibreWPF project, refuses a file the consumer does not alrea
 different PE architecture, and keeps the original for `--restore`. A consumer rebuild from the
 feed also replaces it. Publish with `dist.local.sh` once the change is right.
 
+OpenDevelop no longer reads this checkout's `artifacts/local-feed`: it restores the closure from its
+own project-local feed, `OpenDevelop/artifacts/openavalon-feed`, which `sync-openavalon-feed.ps1`
+fills from GitHub Packages (one `<Id>.<Version>.nupkg` plus a `.verified` receipt per package). To
+try a LibreWPF fix there without publishing, patch the package in that feed:
+
+```bash
+./dev-patch-feed.sh PresentationCore         # build, replace lib/net10.0/PresentationCore.dll in LibreWPF.Transport
+./dev-patch-feed.sh --status                 # which packages are patched
+./dev-patch-feed.sh --restore                # put every original package back
+```
+
+The feed defaults to `$OPENDEVELOP_FEED`, else `$OPENDEVELOP_ROOT` (default `../OpenDevelop`) +
+`/artifacts/openavalon-feed`; `--feed <dir>` overrides both. It replaces only an existing
+`lib/net10.0/<Name>.dll`, refuses a different PE architecture (per-RID copies under `runtimes/`
+stay as published), keeps the first original in `<feed>/.patch-backup`, keeps the `.verified`
+receipt so `sync-openavalon-feed.ps1` does not overwrite the patched package (`-Force` does), and
+drops the consumer's global NuGet cache entry for that package, since NuGet serves the first copy
+it ever extracted for a version. Rebuild the consumer afterwards (OpenDevelop: build
+`src/Main/SharpDevelop/SharpDevelop.csproj` once; check the host's `PresentationCore.dll` hash against
+`LibreWPF/artifacts/bin/PresentationCore/Release/net10.0/`). Needs `unzip` and `zip`; local iteration
+only - CI publishes the real packages.
+
 ## Windows lane
 
 Required workstation tools:
