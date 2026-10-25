@@ -282,7 +282,10 @@ jobs:
         with:
           pattern: progpu-native-linux-*
           merge-multiple: true
-          path: LibreWPF/external/ProGPU/artifacts
+          # This artifact contains the contents of `package/` (unlike the
+          # Windows artifact, whose two upload roots retain `progpu-native/`).
+          # Restore it at its canonical package root so both forms converge.
+          path: LibreWPF/external/ProGPU/artifacts/progpu-native/package
       # The package preflight requires the FreeType and private EDIT ICU inputs
       # for every RID, so build them exactly as ProGPU's own release does.
       - name: Download the Windows managed runtime payload
