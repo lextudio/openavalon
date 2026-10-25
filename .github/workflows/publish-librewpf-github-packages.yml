@@ -71,11 +71,57 @@ jobs:
             LibreWPF/external/ProGPU/artifacts/progpu-dx12/download/${{ matrix.rid }}
             LibreWPF/external/ProGPU/artifacts/wgpu-native-windows/${{ matrix.rid }}
           key: progpu-dx12-downloads-${{ matrix.rid }}-${{ hashFiles('LibreWPF/external/ProGPU/eng/wgpu-dxc/**') }}
+      # The native stage deletes its CMake tree before every rebuild, so every run compiles
+      # ProGPU.Native from scratch: ~20 minutes on x64 and ~42 on ARM64. ccache keeps the object
+      # files keyed by preprocessed source, compiler identity and flags, so the second run of an
+      # unchanged tree reuses them while anything that changes the output still misses.
+      - name: Install pinned ccache
+        shell: pwsh
+        run: |
+          $arm64 = '${{ matrix.rid }}' -eq 'win-arm64'
+          $asset = if ($arm64) { 'ccache-4.14.2-windows-aarch64.zip' } else { 'ccache-4.14.2-windows-x86_64.zip' }
+          $expected = if ($arm64) { '47ea5a0ed661bea53962d8fb8ee9a1769092d979a6f7c73d3081499b3305b2ab' } else { '6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84' }
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          curl.exe -sSL -o $archive "https://github.com/ccache/ccache/releases/download/v4.14.2/$asset"
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "ccache archive hash $actual does not match $expected." }
+          $root = Join-Path $env:RUNNER_TEMP 'ccache'
+          Expand-Archive $archive -DestinationPath $root -Force
+          $exe = Get-ChildItem $root -Recurse -Filter ccache.exe | Select-Object -First 1
+          if (-not $exe) { throw 'The ccache archive did not contain ccache.exe.' }
+          $exe.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $exe.FullName --version
+      - name: Cache native compiler objects
+        uses: actions/cache@v4
+        with:
+          path: LibreWPF/external/ProGPU/artifacts/progpu-ccache
+          key: progpu-ccache-${{ matrix.rid }}-ccache4.14.2-${{ hashFiles('LibreWPF/external/ProGPU/src/ProGPU.Native/**', 'LibreWPF/external/ProGPU/eng/build-progpu-native-windows.ps1', 'LibreWPF/external/ProGPU/eng/native-freetype.json', 'LibreWPF/external/ProGPU/eng/native-edit-word-icu.json') }}
+          restore-keys: |
+            progpu-ccache-${{ matrix.rid }}-ccache4.14.2-
       - name: Build the Windows native payload
         shell: bash
         # The ProGPU script resolves dumpbin.exe from this runner's selected
         # VS installation if the VS 2026 developer shell omits it from PATH.
+        env:
+          # CMake reads both launchers from the environment as cache initializers, so the pinned
+          # builder script stays unaware of ccache. The lane compiles Release MSVC objects without
+          # /Zi, which is the one MSVC mode ccache cannot handle.
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_DIR: ${{ github.workspace }}/LibreWPF/external/ProGPU/artifacts/progpu-ccache
+          CCACHE_MAXSIZE: 1G
+          CCACHE_COMPRESS: 'true'
+          CCACHE_COMPRESSLEVEL: '6'
         run: DIST_LOCAL_TARGET_PLATFORM=windows DIST_LOCAL_STAGE_NATIVE_ONLY=1 DIST_LOCAL_WINDOWS_RIDS=${{ matrix.rid }} ./dist.local.sh
+      # A hit rate that jumps or collapses is the first sign that an input the cache cannot see
+      # changed, so keep the counters in the log next to the architecture check.
+      - name: Report ccache statistics
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/LibreWPF/external/ProGPU/artifacts/progpu-ccache
+        run: ccache --show-stats --verbose
       - name: Upload Windows native payload
         uses: actions/upload-artifact@v4
         with:
