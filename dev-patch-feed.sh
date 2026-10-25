@@ -17,7 +17,8 @@
 # The package's `.verified` receipt is kept on purpose: sync-openavalon-feed.ps1 then treats the
 # patched file as already present and does not overwrite it (-Force does). The first original of
 # every package is kept in <feed>/.patch-backup for --restore. The consumer's global NuGet cache
-# entry for the patched package is dropped, because NuGet serves the first copy it ever extracted
+# entry for the patched package is dropped (the folder its NuGet.config's globalPackagesFolder names,
+# else $NUGET_PACKAGES / ~/.nuget/packages), because NuGet serves the first copy it ever extracted
 # for a given version string; rebuild the consumer afterwards to pick the patch up.
 #
 # This is local iteration ONLY. Publish through CI / dist.local.sh once the change is right.
@@ -56,7 +57,27 @@ fi
 [[ -d "${feed}" ]] || { echo "Feed directory ${feed} does not exist (run OpenDevelop's sync-openavalon-feed.ps1 first)." >&2; exit 1; }
 feed="$(cd "${feed}" && pwd)"
 backup_dir="${feed}/.patch-backup"
-nuget_root="${NUGET_PACKAGES:-${HOME}/.nuget/packages}"
+
+# The consumer's global packages folder(s) the patched package must be dropped from. A consumer that
+# sets <add key="globalPackagesFolder" value="..."/> in the NuGet.config next to its feed's artifacts
+# directory (OpenDevelop: artifacts/nuget-packages) extracts there, so clearing only
+# ~/.nuget/packages would leave the stale copy NuGet keeps serving for a version string. The user
+# folder ($NUGET_PACKAGES or ~/.nuget/packages) is cleared too; it is harmless when absent.
+nuget_roots=("${NUGET_PACKAGES:-${HOME}/.nuget/packages}")
+consumer_root="$(cd "${feed}/../.." 2>/dev/null && pwd || true)"
+consumer_config="${consumer_root}/NuGet.config"
+if [[ -n "${consumer_root}" && -f "${consumer_config}" ]]; then
+  # `{p;q;}` stops at the first match (a pipe into `head -n 1` can SIGPIPE sed and, under pipefail,
+  # abort the script when two lines match).
+  configured="$(sed -n '/key="globalPackagesFolder"/{s:.*value="\([^"]*\)".*:\1:;p;q;}' "${consumer_config}")"
+  configured="${configured//\\//}"
+  if [[ -n "${configured}" ]]; then
+    case "${configured}" in
+      /*|[A-Za-z]:*) nuget_roots+=("${configured}") ;;
+      *) nuget_roots+=("${consumer_root}/${configured}") ;;
+    esac
+  fi
+fi
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
@@ -74,8 +95,11 @@ drop_cache() {
   local id version dir
   read -r id version <<<"$(package_id_version "$1")"
   [[ -n "${id}" && -n "${version}" ]] || return 0
-  dir="${nuget_root}/$(lower "${id}")/$(lower "${version}")"
-  if [[ -d "${dir}" ]]; then rm -rf "${dir}"; echo "dropped global cache ${dir}"; fi
+  local root dir
+  for root in "${nuget_roots[@]}"; do
+    dir="${root}/$(lower "${id}")/$(lower "${version}")"
+    if [[ -d "${dir}" ]]; then rm -rf "${dir}"; echo "dropped global cache ${dir}"; fi
+  done
 }
 
 probe_pe_machine() {

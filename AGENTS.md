@@ -91,8 +91,9 @@ The feed defaults to `$OPENDEVELOP_FEED`, else `$OPENDEVELOP_ROOT` (default `../
 `lib/net10.0/<Name>.dll`, refuses a different PE architecture (per-RID copies under `runtimes/`
 stay as published), keeps the first original in `<feed>/.patch-backup`, keeps the `.verified`
 receipt so `sync-openavalon-feed.ps1` does not overwrite the patched package (`-Force` does), and
-drops the consumer's global NuGet cache entry for that package, since NuGet serves the first copy
-it ever extracted for a version. Rebuild the consumer afterwards (OpenDevelop: build
+drops the consumer's global NuGet cache entry for that package (the `globalPackagesFolder` its
+`NuGet.config` names - OpenDevelop: `artifacts/nuget-packages` - and `$NUGET_PACKAGES` /
+`~/.nuget/packages`), since NuGet serves the first copy it ever extracted for a version. Rebuild the consumer afterwards (OpenDevelop: build
 `src/Main/SharpDevelop/SharpDevelop.csproj` once; check the host's `PresentationCore.dll` hash against
 `LibreWPF/artifacts/bin/PresentationCore/Release/net10.0/`). Needs `unzip` and `zip`; local iteration
 only - CI publishes the real packages.
