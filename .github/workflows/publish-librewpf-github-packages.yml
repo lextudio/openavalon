@@ -85,10 +85,59 @@ jobs:
             LibreWPF/external/ProGPU/artifacts/progpu-native/package
             LibreWPF/external/ProGPU/artifacts/progpu-dx12/package
 
+  # Microsoft.DotNet.Wpf.GitHub ships per-RID PresentationCore/DirectWriteForwarder
+  # (C++/CLI) that only a Windows host can build; the macOS closure consumes them.
+  # Mirrors LibreWPF's own progpu-wpf-sdk.yml windows-managed-runtime job.
+  stage-windows-managed-runtime:
+    name: Windows managed runtime payload
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Initialize nested submodules with long paths
+        shell: bash
+        run: |
+          git config --global core.longpaths true
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+      - name: Prepare exact framework source dependencies
+        shell: bash
+        working-directory: LibreWPF
+        run: |
+          python external/ProGPU/eng/progpu-prepare-framework-sources.py
+          echo "ProGpuSourceRoot=${GITHUB_WORKSPACE}/LibreWPF/external/ProGPU/" >> "${GITHUB_ENV}"
+          echo "LibreWpfSourceRoot=${GITHUB_WORKSPACE}/LibreWPF/" >> "${GITHUB_ENV}"
+          echo "LibreWinFormsSourceRoot=${GITHUB_WORKSPACE}/LibreWPF/external/LibreWinForms/" >> "${GITHUB_ENV}"
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: LibreWPF/global.json
+      - name: Build Windows PresentationCore and DirectWriteForwarder
+        shell: pwsh
+        working-directory: LibreWPF
+        run: ./eng/progpu-wpf-windows-managed-runtime.ps1 -Configuration Release
+      - name: Verify the per-RID managed runtime payload
+        shell: bash
+        run: |
+          for rid in win-x64 win-arm64; do
+            for dll in PresentationCore DirectWriteForwarder; do
+              test -s "LibreWPF/artifacts/windows-managed-runtime/${rid}/net10.0/${dll}.dll"
+            done
+          done
+      - name: Upload Windows managed runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: librewpf-windows-managed-runtime
+          path: LibreWPF/artifacts/windows-managed-runtime
+          if-no-files-found: error
+
   publish:
     name: Windows and macOS package closure
     runs-on: macos-15
-    needs: stage-windows-native
+    needs:
+      - stage-windows-native
+      - stage-windows-managed-runtime
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -123,6 +172,11 @@ jobs:
           path: LibreWPF/external/ProGPU/artifacts
       # The package preflight requires the FreeType and private EDIT ICU inputs
       # for every RID, so build them exactly as ProGPU's own release does.
+      - name: Download the Windows managed runtime payload
+        uses: actions/download-artifact@v4
+        with:
+          name: librewpf-windows-managed-runtime
+          path: LibreWPF/artifacts/windows-managed-runtime
       - name: Build the ProGPU macOS ARM64 native payload
         shell: bash
         run: |
