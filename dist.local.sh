@@ -145,6 +145,8 @@ fi
 if [[ "${target_platform}" == "windows" ]]; then
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-1}"
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-true}"
+  # The FreeType/ICU package verifiers otherwise require every RID they know.
+  export ProGpuNativePackageRids="${ProGpuNativePackageRids:-win-x64 win-arm64}"
   if [[ "${stage_native_only}" != "1" ]]; then
     # MSBuild's /m switch does not constrain cl.exe's own /MP workers.  The
     # System.Printing PCH is large enough to exhaust this workstation otherwise.
@@ -166,6 +168,10 @@ if [[ "${target_platform}" == "windows" ]]; then
 else
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-0}"
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-false}"
+  # The macOS lane publishes the Windows-and-macOS closure, never Linux or osx-x64.
+  if [[ "${target_platform}" == "macos" ]]; then
+    export ProGpuNativePackageRids="${ProGpuNativePackageRids:-win-x64 win-arm64 osx-arm64}"
+  fi
 fi
 
 if [[ "${target_platform}" == "macos" ]]; then
