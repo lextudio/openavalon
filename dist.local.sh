@@ -910,13 +910,18 @@ pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "L
   -p:ProGpuPackageVersion="${progpu_package_version}"
 
 section "Packing LibreWinForms packages"
-# LibreWinForms' global.json pins an 11.0.100 preview that the system dotnet does not have; only
-# LibreWPF's .dotnet does. The pack itself runs from a directory without that constraint, but the
-# canonical build it starts from the LibreWinForms root (an Exec, using the dotnet that is running
-# the pack) does not, and fails with "The required .NET SDK wasn't found". Make LibreWPF's SDK the
-# host for the whole stage so both resolve it.
+# This closure runs one SDK family: whichever the host carries, rc.2 or newer. Arcade's
+# InitializeDotNetCli installs the SDK that LibreWinForms' global.json names into
+# LibreWinForms/.dotnet whenever that checkout-local copy is missing (its tools/runtimes block
+# skips the "use the installed CLI" shortcut), and that checkout-only SDK becomes what
+# `dotnet --version` reports. LibreWinForms' isolated consumer stages then pin that exact version
+# with rollForward=disable and no SDK search paths of their own - the host cannot resolve it, and
+# dotnet exits 155 ("A compatible .NET SDK was not found"). Make LibreWPF's SDK the host for the
+# whole stage, and name it as the install root too (the idiom the canonical WinForms slice above
+# already uses): the pack reuses the host SDK instead of downloading a second copy of it.
 export PATH="${wpf_root}/.dotnet:${PATH}"
 export DOTNET_ROOT="$(env_path "${wpf_root}/.dotnet")"
+export DOTNET_INSTALL_DIR="$(env_path "${wpf_root}/.dotnet")"
 # librewinforms-pack.sh validates that its output directory holds EXACTLY the LibreWinForms
 # preview bundle and nothing else ("Unexpected current-version package artifact: ..."), which is a
 # legitimate purity gate for a release bundle but incompatible with pointing it straight at the
