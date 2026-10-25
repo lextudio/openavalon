@@ -1,8 +1,8 @@
 name: Publish LibreWPF GitHub Packages
 
-# Publish one Windows-and-macOS closure at the same versions as nuget.org. Linux is deliberately
-# absent: the Windows job stages win-x64/win-arm64 payloads, and the macOS job adds osx-arm64
-# before it creates the packages.
+# Publish one Windows, Linux, and macOS closure at the same versions as nuget.org.
+# WPF remains Windows-only; the Linux slices are native ProGPU assets for consumers
+# that select those RIDs from the shared package closure.
 on:
   push:
     branches:
@@ -131,6 +131,66 @@ jobs:
             LibreWPF/external/ProGPU/artifacts/progpu-native/package
             LibreWPF/external/ProGPU/artifacts/progpu-dx12/package
 
+  stage-linux-native:
+    name: Stage ${{ matrix.rid }} native payloads
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Initialize nested submodules
+        shell: bash
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+      - name: Install Linux WebGPU build dependencies
+        shell: bash
+        working-directory: LibreWPF/external/ProGPU
+        run: |
+          ./eng/progpu-install-linux-packages.sh \
+            clang clang-tools cmake ninja-build gnupg fonts-dejavu-core \
+            libvulkan1 mesa-vulkan-drivers libx11-xcb1 libxcb1 libxcb-randr0 \
+            libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-xfixes0 \
+            libxcb-present0 libxkbcommon0
+      - name: Verify the native runner architecture
+        shell: bash
+        run: |
+          case "${{ matrix.rid }}:$(uname -m)" in
+            linux-x64:x86_64|linux-arm64:aarch64|linux-arm64:arm64) ;;
+            *) echo "Expected ${{ matrix.rid }} runner, got $(uname -m)." >&2; exit 1 ;;
+          esac
+      - name: Build the Linux native payload
+        shell: bash
+        run: |
+          progpu=LibreWPF/external/ProGPU
+          workspace="$(mktemp -d "${RUNNER_TEMP}/progpu-native-inputs.XXXXXXXX")"
+          workspace="$(cd "${workspace}" && pwd -P)"
+          python3 "${progpu}/eng/progpu-prepare-freetype.py" \
+            --workspace "${workspace}/freetype" --rid "${{ matrix.rid }}" --cc clang --cxx clang++ \
+            --test-font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+          icu_archive="$(python3 tools/fetch-progpu-edit-word-icu.py "${progpu}" "${workspace}/edit-icu")"
+          "${progpu}/eng/build-progpu-native.sh" \
+            --font-manifest "${workspace}/freetype/install/progpu-freetype.json" \
+            --edit-word-icu-archive "${icu_archive}" \
+            --build-only --rid "${{ matrix.rid }}"
+          test -s "${progpu}/artifacts/progpu-native/package/runtimes/${{ matrix.rid }}/native/libprogpu_native.so"
+          test -s "${progpu}/artifacts/progpu-native/package/runtimes/${{ matrix.rid }}/native/libprogpu_native_dawn.so"
+      - name: Upload Linux native payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: progpu-native-linux-${{ matrix.rid }}
+          path: LibreWPF/external/ProGPU/artifacts/progpu-native/package
+          if-no-files-found: error
+
   # Microsoft.DotNet.Wpf.GitHub ships per-RID PresentationCore/DirectWriteForwarder
   # (C++/CLI) that only a Windows host can build; the macOS closure consumes them.
   # Mirrors LibreWPF's own progpu-wpf-sdk.yml windows-managed-runtime job.
@@ -179,10 +239,11 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Windows and macOS package closure
+    name: Windows, Linux, and macOS package closure
     runs-on: macos-15
     needs:
       - stage-windows-native
+      - stage-linux-native
       - stage-windows-managed-runtime
     timeout-minutes: 90
     steps:
@@ -216,6 +277,12 @@ jobs:
           pattern: progpu-native-windows-*
           merge-multiple: true
           path: LibreWPF/external/ProGPU/artifacts
+      - name: Download the Linux native payloads
+        uses: actions/download-artifact@v4
+        with:
+          pattern: progpu-native-linux-*
+          merge-multiple: true
+          path: LibreWPF/external/ProGPU/artifacts
       # The package preflight requires the FreeType and private EDIT ICU inputs
       # for every RID, so build them exactly as ProGPU's own release does.
       - name: Download the Windows managed runtime payload
@@ -241,7 +308,7 @@ jobs:
             --edit-word-icu-archive "${icu_archive}" \
             --build-only --rid osx-arm64
       - name: Aggregate native package input diagnostics
-        run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 osx-arm64
+        run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 linux-x64 linux-arm64 osx-arm64
       - name: Verify the supported native payloads
         shell: bash
         run: |
@@ -254,6 +321,10 @@ jobs:
             win-arm64/native/progpu_native.dll \
             win-arm64/native/progpu_native_dawn.dll \
             win-arm64/native/progpu_native_direct2d.dll \
+            linux-x64/native/libprogpu_native.so \
+            linux-x64/native/libprogpu_native_dawn.so \
+            linux-arm64/native/libprogpu_native.so \
+            linux-arm64/native/libprogpu_native_dawn.so \
             osx-arm64/native/libprogpu_native.dylib \
             osx-arm64/native/libprogpu_native_dawn.dylib; do
             test -s "${native_root}/${path}"
@@ -263,7 +334,7 @@ jobs:
               test -s "${dx12_root}/${rid}/native/${name}"
             done
           done
-          for excluded_rid in linux-x64 linux-arm64 osx-x64; do
+          for excluded_rid in osx-x64; do
             test ! -e "${native_root}/${excluded_rid}"
           done
           for path in win-x64/native/progpu_native.dll win-x64/native/progpu_native_dawn.dll win-x64/native/progpu_native_direct2d.dll; do
@@ -272,10 +343,18 @@ jobs:
           for path in win-arm64/native/progpu_native.dll win-arm64/native/progpu_native_dawn.dll win-arm64/native/progpu_native_direct2d.dll; do
             file "${native_root}/${path}" | grep -Eqi 'Aarch64|ARM64'
           done
+          for path in linux-x64/native/libprogpu_native.so linux-x64/native/libprogpu_native_dawn.so; do
+            file "${native_root}/${path}" | grep -Eq 'x86-64|x86_64'
+          done
+          for path in linux-arm64/native/libprogpu_native.so linux-arm64/native/libprogpu_native_dawn.so; do
+            file "${native_root}/${path}" | grep -Eqi 'Aarch64|ARM64'
+          done
       - name: Build the macOS ARM64 package closure
         env:
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
           DIST_LOCAL_FORCE: '1'
+          PROGPU_PACKAGE_GROUP: opendevelop-crossdesktop
+          ProGpuNativePackageRids: win-x64 win-arm64 linux-x64 linux-arm64 osx-arm64
         run: ./dist.local.sh
       - name: Verify LibreWPF.Sdk remains consumable by .NET 10
         shell: bash
