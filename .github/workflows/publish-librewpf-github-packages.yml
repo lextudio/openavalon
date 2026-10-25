@@ -354,18 +354,24 @@ jobs:
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
         run: |
           shopt -s nullglob
-          packages=("${DIST_LOCAL_FEED}"/*.0.1.0-preview.69.nupkg)
+          # dist.local.sh owns the version, so read it instead of repeating the literal here: a bump
+          # on nuget.org must not leave this step looking for packages the build no longer produces.
+          package_version="$(sed -n 's/^dev_package_version="\([^"]*\)"$/\1/p' dist.local.sh)"
+          progpu_version="$(sed -n 's/^progpu_package_version="\([^"]*\)"$/\1/p' dist.local.sh)"
+          if [[ -z "${package_version}" ]]; then
+            echo "Unable to read dev_package_version from dist.local.sh." >&2
+            exit 1
+          fi
+          # One closure means one version; the ProGPU IDs below are checked at the LibreWPF version.
+          if [[ "${package_version}" != "${progpu_version}" ]]; then
+            echo "dist.local.sh publishes LibreWPF at '${package_version}' and ProGPU at '${progpu_version}', but this step publishes a single closure." >&2
+            exit 1
+          fi
+          packages=("${DIST_LOCAL_FEED}"/*."${package_version}".nupkg)
           if [[ ${#packages[@]} -eq 0 ]]; then
-            echo "No 0.1.0-preview.69 packages were produced." >&2
+            echo "No ${package_version} packages were produced in ${DIST_LOCAL_FEED}." >&2
             exit 1
           fi
-          version_package="${DIST_LOCAL_FEED}/LibreWPF.Interop."*.nupkg
-          if [[ ! -f "${version_package}" ]]; then
-            echo "Unable to derive the package version from LibreWPF.Interop." >&2
-            exit 1
-          fi
-          package_version="${version_package#${DIST_LOCAL_FEED}/LibreWPF.Interop.}"
-          package_version="${package_version%.nupkg}"
           required=(
             LibreWPF.Interop LibreWPF.ProGPU LibreWPF.Sdk LibreWPF.Transport
             LibreWinForms.ProGPU LibreWinForms.Sdk LibreWinForms.System.Windows.Forms LibreWinForms.WindowsFormsIntegration
