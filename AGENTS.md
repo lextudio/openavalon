@@ -39,6 +39,26 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
   backslashes (`MS\Internal\IO\...` became `MSInternalIO...` in WindowsBase's string-table
   generator). This only shows up on a clean intermediate directory, so incremental builds hide it.
 
+## Publishing: one run at a time
+
+`publish-librewpf-github-packages.yml` triggers on every push that touches `LibreWPF`,
+`dist.local.sh`, `.gitmodules` or the workflow itself, and it is serialised with
+`cancel-in-progress: false`: a second run **queues** behind the first instead of superseding
+it. It takes 1.5-2 hours, so two submodule bumps half an hour apart start two full runs, the
+older one publishes the superseded closure first, and the newest bits reach the feed only after
+both have finished.
+
+Bump `LibreWPF` only when the previous publish run has completed. If a stale run is already
+queued or running, cancel it by hand - safely while its "Windows, Linux, and macOS package
+closure" job is still in the build/verify steps, because nothing is deleted or uploaded before
+the "Publish the package closure to GitHub Packages" step, and the superseding run republishes
+the whole closure anyway:
+
+```bash
+gh run list --repo lextudio/openavalon --workflow publish-librewpf-github-packages.yml --limit 5
+gh run cancel <stale-run-id> --repo lextudio/openavalon
+```
+
 ## Incremental runs and the inner loop
 
 `dist.local.sh` skips every expensive stage whose inputs are unchanged since its last successful
