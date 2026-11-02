@@ -1,8 +1,29 @@
-# OpenAvalon local-feed notes
+# OpenAvalon packaging notes
 
-This checkout prepares the local NuGet feed (`artifacts/local-feed`, registered as the
-`openavalon-local` source) that OpenDevelop consumes. One script, `dist.local.sh`, serves both
-supported hosts and picks the lane from the host it runs on:
+## How consumers get these packages
+
+GitHub Actions builds and publishes the whole LibreWPF / LibreWinForms / ProGPU closure to lextudio
+GitHub Packages (`publish-librewpf-github-packages.yml`, triggered by a push that touches
+`LibreWPF`, `dist.local.sh`, `.gitmodules` or the workflow). Consumers download it; nobody compiles
+the closure locally to use it, which is what made the old local-feed route slow.
+
+- **Use the published packages.** OpenDevelop's `sync-openavalon-feed.ps1` downloads the versions it
+  pins, with the GitHub CLI's credential (`gh auth refresh -h github.com -s read:packages`), into its
+  project-local feed `OpenDevelop/artifacts/openavalon-feed`. CI restores the same packages with its
+  own token. A new LibreWPF reaches OpenDevelop when its pins move to a published version.
+- **Try a change before publishing.** Build only the assembly you changed and replace it in the
+  consumer: `./dev-overlay.sh` (the consumer's `bin`) or `./dev-patch-feed.sh` (the package inside
+  OpenDevelop's feed). Both are described under "Incremental runs and the inner loop" below.
+- **Ship it.** Commit and push here; the publish workflow does the rest (see "Publishing: one run at a
+  time").
+
+Everything below documents `dist.local.sh` and the packing rules it enforces. It is what the publish
+workflow runs on each platform. Run it on a workstation only to reproduce or debug that workflow;
+its `artifacts/local-feed` is not how OpenDevelop gets packages any more.
+
+## dist.local.sh lanes
+
+One script, `dist.local.sh`, serves every lane and picks it from the host it runs on:
 
 | Host | Lane (`DIST_LOCAL_TARGET_PLATFORM`) | Native slices shipped | Canonical WindowsFormsIntegration |
 |---|---|---|---|
@@ -80,9 +101,10 @@ The LibreWPF transport build and its three packs always run; they are the part a
 needs. `--force` (or `DIST_LOCAL_FORCE=1`) ignores every receipt. Deleting one receipt rebuilds just
 that stage.
 
-The feed is changed only by moving a published file aside first (`artifacts/local-feed-backup`).
-If the run fails, the trap removes every package the run wrote and restores the previous files, so
-a failed run leaves the feed as it was - it no longer loses the version being republished.
+`dist.local.sh` changes its own `artifacts/local-feed` only by moving a published file aside first
+(`artifacts/local-feed-backup`). If the run fails, the trap removes every package the run wrote and
+restores the previous files, so a failed run leaves that directory as it was - it no longer loses the
+version being republished.
 
 For a one-assembly change, do not go through the feed at all while iterating:
 
@@ -93,7 +115,8 @@ For a one-assembly change, do not go through the feed at all while iterating:
 
 It builds the named LibreWPF project, refuses a file the consumer does not already have or a
 different PE architecture, and keeps the original for `--restore`. A consumer rebuild from the
-feed also replaces it. Publish with `dist.local.sh` once the change is right.
+feed also replaces it. Once the change is right, ship it by pushing here: the publish workflow
+builds and publishes the closure to GitHub Packages.
 
 OpenDevelop no longer reads this checkout's `artifacts/local-feed`: it restores the closure from its
 own project-local feed, `OpenDevelop/artifacts/openavalon-feed`, which `sync-openavalon-feed.ps1`

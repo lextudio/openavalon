@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Inner-loop shortcut: rebuild individual LibreWPF assemblies and overlay them onto a consumer's
 # build output (for example OpenDevelop's bin), so a one-file change can be tried in minutes
-# instead of a full dist.local.sh. This is for local iteration ONLY - it never touches the feed,
-# and the next restore/build of the consumer from the feed replaces the overlaid files. Publish
-# with dist.local.sh once the change is right. To try a fix through a consumer's project-local feed
+# instead of waiting for a publish run. This is for local iteration ONLY - it never touches the feed,
+# and the next restore/build of the consumer from the feed replaces the overlaid files. Ship the
+# change by pushing it to this repository once it is right: publish-librewpf-github-packages.yml builds
+# and publishes the closure to GitHub Packages. To try a fix through a consumer's project-local feed
 # (OpenDevelop's artifacts/openavalon-feed) use ./dev-patch-feed.sh instead.
 #
 #   ./dev-overlay.sh <consumer-bin-dir> <AssemblyName>...   overlay (e.g. PresentationCore)

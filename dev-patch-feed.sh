@@ -2,7 +2,7 @@
 # Inner-loop shortcut for a consumer that restores the OpenAvalon closure from a project-local feed
 # (OpenDevelop: artifacts/openavalon-feed, filled by sync-openavalon-feed.ps1 from GitHub
 # Packages): rebuild individual LibreWPF assemblies and replace them inside the matching package
-# in THAT feed, so one fix is tried in OpenDevelop in minutes instead of a full dist.local.sh.
+# in THAT feed, so one fix is tried in OpenDevelop in minutes instead of waiting for a publish run.
 #
 #   ./dev-patch-feed.sh [--feed <dir>] <AssemblyName>...   build and patch (e.g. PresentationCore)
 #   ./dev-patch-feed.sh [--feed <dir>] --status            list patched packages
@@ -21,7 +21,8 @@
 # else $NUGET_PACKAGES / ~/.nuget/packages), because NuGet serves the first copy it ever extracted
 # for a given version string; rebuild the consumer afterwards to pick the patch up.
 #
-# This is local iteration ONLY. Publish through CI / dist.local.sh once the change is right.
+# This is local iteration ONLY. Ship the change by pushing it here once it is right: the publish
+# workflow (publish-librewpf-github-packages.yml) builds and publishes the closure to GitHub Packages.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
