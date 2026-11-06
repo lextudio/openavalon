@@ -245,7 +245,9 @@ jobs:
       - stage-windows-native
       - stage-linux-native
       - stage-windows-managed-runtime
-    timeout-minutes: 90
+    # The mobile native slices add four CMake/Xcode builds and Android SDK/NDK
+    # provisioning to the existing cross-desktop closure work.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -264,6 +266,22 @@ jobs:
             11.0.100-rc.2.26504.105
             10.0.x
           architecture: arm64
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK command-line tools
+        uses: android-actions/setup-android@v3
+      - name: Install mobile workloads and Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet workload install android ios
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install 'ndk;27.0.12077973'
+          ndk_root="${ANDROID_HOME}/ndk/27.0.12077973"
+          test -f "${ndk_root}/build/cmake/android.toolchain.cmake"
+          echo "ANDROID_NDK_ROOT=${ndk_root}" >> "${GITHUB_ENV}"
       - name: Show the pinned .NET 11 RC2 SDK
         run: dotnet --info
       - name: Expose the pinned SDK to LibreWPF canonical tools
@@ -310,6 +328,12 @@ jobs:
             --font-manifest "${workspace}/freetype/install/progpu-freetype.json" \
             --edit-word-icu-archive "${icu_archive}" \
             --build-only --rid osx-arm64
+      - name: Build the ProGPU Android and iOS native payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          progpu=LibreWPF/external/ProGPU
+          "${progpu}/eng/build-progpu-native-mobile.sh" all
       - name: Aggregate native package input diagnostics
         run: python3 LibreWPF/external/ProGPU/eng/progpu-preflight-native-package.py --root LibreWPF/external/ProGPU/artifacts --rids win-x64 win-arm64 linux-x64 linux-arm64 osx-arm64
       - name: Verify the supported native payloads
@@ -359,6 +383,12 @@ jobs:
           PROGPU_PACKAGE_GROUP: opendevelop-crossdesktop
           ProGpuNativePackageRids: win-x64 win-arm64 linux-x64 linux-arm64 osx-arm64
         run: ./dist.local.sh
+      - name: Pack the ProGPU mobile package closure
+        shell: bash
+        env:
+          PROGPU_PACKAGE_OUTPUT: ${{ runner.temp }}/librewpf-github-feed
+          PROGPU_PACKAGE_GROUP: mobile
+        run: LibreWPF/external/ProGPU/eng/progpu-pack.sh
       - name: Verify LibreWPF.Sdk remains consumable by .NET 10
         shell: bash
         env:
@@ -461,6 +491,7 @@ jobs:
             ProGPU.DirectX ProGPU.Layout ProGPU.Media ProGPU.Media.Scene ProGPU.Scene ProGPU.SkiaSharp
             ProGPU.System.Drawing.Common ProGPU.Text ProGPU.Text.Shaping ProGPU.Transpiler ProGPU.Vector
             ProGPU.Virtualization ProGPU.WinRT ProGPU.WinUI
+            ProGPU.Android ProGPU.Android.Media ProGPU.iOS ProGPU.Apple.Media
           )
           for id in "${required[@]}"; do
             if [[ ! -f "${DIST_LOCAL_FEED}/${id}.${package_version}.nupkg" ]]; then
