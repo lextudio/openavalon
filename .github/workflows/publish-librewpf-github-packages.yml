@@ -270,16 +270,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK command-line tools
-        uses: android-actions/setup-android@v3
-      - name: Install mobile workloads and Android NDK
+      - name: Install mobile workloads and select the preinstalled Android NDK
         shell: bash
         run: |
           set -euo pipefail
           dotnet workload install android ios
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install 'ndk;27.0.12077973'
-          ndk_root="${ANDROID_HOME}/ndk/27.0.12077973"
+          # macos-15 already exposes command-line tools and NDK r27.3.  Do
+          # not use android-actions/setup-android: its default `tools`
+          # package was removed from the current SDK repository.
+          ndk_root="${ANDROID_NDK_ROOT}"
           test -f "${ndk_root}/build/cmake/android.toolchain.cmake"
           echo "ANDROID_NDK_ROOT=${ndk_root}" >> "${GITHUB_ENV}"
       - name: Show the pinned .NET 11 RC2 SDK
