@@ -270,11 +270,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install mobile workloads and select the preinstalled Android NDK
+      - name: Install Apple and Android workloads and select the preinstalled Android NDK
         shell: bash
         run: |
           set -euo pipefail
-          dotnet workload install android ios
+          # ProGPU.Apple.Media multi-targets net10.0-ios and net10.0-macos.
+          dotnet workload install android ios macos
           # macos-15 already exposes command-line tools and NDK r27.3.  Do
           # not use android-actions/setup-android: its default `tools`
           # package was removed from the current SDK repository.
