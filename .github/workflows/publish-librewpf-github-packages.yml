@@ -386,9 +386,14 @@ jobs:
       - name: Pack the ProGPU mobile package closure
         shell: bash
         env:
-          PROGPU_PACKAGE_OUTPUT: ${{ runner.temp }}/librewpf-github-feed
+          # progpu-pack verifies that its output contains only the selected
+          # package group. Keep this separate from dist.local's full closure,
+          # then merge publishable packages after that verification passes.
+          PROGPU_PACKAGE_OUTPUT: ${{ runner.temp }}/progpu-mobile-feed
           PROGPU_PACKAGE_GROUP: mobile
-        run: LibreWPF/external/ProGPU/eng/progpu-pack.sh
+        run: |
+          LibreWPF/external/ProGPU/eng/progpu-pack.sh
+          cp "${PROGPU_PACKAGE_OUTPUT}"/*.nupkg "${RUNNER_TEMP}/librewpf-github-feed/"
       - name: Verify LibreWPF.Sdk remains consumable by .NET 10
         shell: bash
         env:
