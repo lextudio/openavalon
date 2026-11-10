@@ -24,8 +24,27 @@ permissions:
   packages: write
 
 jobs:
+  # Checks the submodule pointers this push commits (tools/preflight-publish.sh) in a minute, because the
+  # canonical WinForms gate that enforces the same rule runs only at the end of the staging jobs, about 70
+  # minutes in. Every other job waits for this one, so a misaligned pointer fails here and costs nothing else.
+  preflight:
+    name: Submodule pointer preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out only what the preflight reads
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 LibreWPF
+          git -C LibreWPF submodule update --init --depth 1 external/LibreWinForms external/ProGPU
+      - name: Check the pinned submodule commits
+        shell: bash
+        run: ./tools/preflight-publish.sh
+
   stage-windows-native:
     name: Stage ${{ matrix.rid }} native payloads
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -133,6 +152,7 @@ jobs:
 
   stage-linux-native:
     name: Stage ${{ matrix.rid }} native payloads
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -196,6 +216,7 @@ jobs:
   # Mirrors LibreWPF's own progpu-wpf-sdk.yml windows-managed-runtime job.
   stage-windows-managed-runtime:
     name: Windows managed runtime payload
+    needs: preflight
     runs-on: windows-2025
     timeout-minutes: 90
     steps:

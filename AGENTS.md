@@ -80,6 +80,51 @@ gh run list --repo lextudio/openavalon --workflow publish-librewpf-github-packag
 gh run cancel <stale-run-id> --repo lextudio/openavalon
 ```
 
+## Before pushing a pointer bump: run the preflight
+
+The pointers form a chain, and one rule across it is enforced only late in the publish run:
+
+```text
+openavalon -> LibreWPF -> external/ProGPU
+                       -> external/LibreWinForms -> external/ProGPU   (its own nested pin)
+```
+
+LibreWinForms's nested `external/ProGPU` and LibreWPF's `external/ProGPU` must be **the same
+commit** (`LibreWPF/eng/progpu-wpf-canonical-winforms-integration.sh`, "LibreWinForms pins ProGPU X,
+but LibreWPF has Y"). That gate runs at the end of the macOS closure job, after about 70 minutes of
+native staging, so a mismatch costs a full run and publishes nothing. Run 42720059364 (2026-11-09)
+failed exactly this way after a ProGPU bump moved only LibreWPF's pin.
+
+So a ProGPU change goes up the chain one repository at a time, each pushed before the next points at it
+(every repository has its own review and commit):
+
+1. ProGPU (`lextudio/ProGPU` main).
+2. LibreWinForms: bump its `external/ProGPU` (`lextudio/librewinforms`, branch `codex/align-progpu-crossdesktop`).
+3. LibreWPF: bump `external/ProGPU` **and** `external/LibreWinForms` (`lextudio/LibreWPF`, its current branch).
+4. openavalon: bump `LibreWPF`.
+
+Before the push in step 4, and after committing it, run
+
+```bash
+./tools/preflight-publish.sh
+```
+
+It reads the pointers committed at `HEAD` of each repository (what CI would check out), prints the chain
+and fails with the fix when the two ProGPU pins differ or a pinned commit is not in the checkout (not
+pushed). It also validates ProGPU's `eng/progpu-package-list.sh` (the parallel id/project arrays) by
+sourcing it. The workflow's first job, `preflight`, runs the same script and every other job
+`needs:` it, so a bad pointer now fails in about a minute; do not rely on that to save you the push, a
+failed run still occupies the serialised queue.
+
+Rules that follow from the incident:
+
+- **Reproduce a gate locally before pushing something that starts a 1.5-2 hour run.** Read the gate's own
+  comparison (the script named in the error) and run it, instead of inferring the rule.
+- **A change to the workflow file starts a publish run too** (it is in the trigger paths). Push the
+  workflow/preflight change together with the pointer bump, never ahead of it, or the first run uses the
+  old pointers and fails again.
+- Put any new cross-repository invariant into `tools/preflight-publish.sh`, not only into a late script.
+
 ## Incremental runs and the inner loop
 
 `dist.local.sh` skips every expensive stage whose inputs are unchanged since its last successful
