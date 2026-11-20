@@ -43,13 +43,18 @@ The macOS lane refuses to run on an Intel Mac: there is no osx-x64 release.
   canonical WFI to have been built from LibreWinForms' current HEAD. When ProGPU changes, advance
   it in both places; do not commit into a nested repository while a feed build is running, or
   the last step fails with "Canonical WFI was not qualified against LibreWinForms commit ...".
-- Versions: hard-coded at the top of `dist.local.sh` (`dev_package_version`,
-  `progpu_package_version`), both matching the newest release on nuget.org (currently
-  `0.1.0-preview.69`); update both when nuget.org moves on. The run prints them first
-  (`== Package versions: ... ==`). Never lower a version to match a consumer's pin — earlier
-  versions already in the feed stay in place so older pins keep restoring. `LibreWPF.Sdk` is packed with
+- Versions: one version for the whole closure, computed at the top of `dist.local.sh`:
+  `upstream_package_version` (the nuget.org preview it is based on, currently `0.1.0-preview.69`)
+  plus `.<DIST_LOCAL_PACKAGE_VERSION_SUFFIX>`, which the publish workflow sets to
+  `<github.run_number>.<github.run_attempt>` (for example `0.1.0-preview.69.123.1`) and a local run
+  defaults to `0.0`. Every publish is therefore a new, higher version: it sorts above the upstream
+  `preview.69` and below a future `preview.70`, so update only `upstream_package_version` when
+  nuget.org moves on. Never republish over an existing version (NuGet caches cannot tell two
+  publishes of one version apart). `./dist.local.sh --print-version` prints the version the run
+  would use; workflow steps read it from there instead of repeating it. The run prints it first
+  (`== Package versions: ... ==`). Never lower a version to match a consumer's pin; earlier versions stay in the feed so older pins keep restoring. `LibreWPF.Sdk` is packed with
   `ProGpuPackageVersion=<ProGPU version>` so its consumers restore the ProGPU packages this feed
-  just produced. Republish over the same version rather than inventing a side version.
+  just produced; consumers (OpenDevelop and its add-ins) move their pins to each new version.
 - Scripts must run under macOS's stock bash 3.2 as well as Git for Windows Bash (bash 5): no
   associative arrays (`declare -A`), `mapfile`, or `${var,,}`.
 - The canonical integration script disables the pinned ApiCompat checks

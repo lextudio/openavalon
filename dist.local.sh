@@ -51,23 +51,39 @@ windows_rids=(win-x64 win-arm64)
 # Expensive stages whose inputs have not changed since their last successful run are skipped
 # (see "Stage receipts" below). --force, or DIST_LOCAL_FORCE=1, rebuilds everything.
 force_rebuild="${DIST_LOCAL_FORCE:-0}"
+print_version=0
 for argument in "$@"; do
   case "${argument}" in
     --force) force_rebuild=1 ;;
-    *) echo "Unknown argument '${argument}'. Usage: $0 [--force]" >&2; exit 1 ;;
+    --print-version) print_version=1 ;;
+    *) echo "Unknown argument '${argument}'. Usage: $0 [--force | --print-version]" >&2; exit 1 ;;
   esac
 done
 
-# Versions match the newest release on nuget.org (LibreWPF/LibreWinForms and ProGPU ship
-# together at the same number). Update both lines when nuget.org moves on.
-dev_package_version="0.1.0-preview.69"
-progpu_package_version="0.1.0-preview.69"
+# LibreWPF/LibreWinForms and ProGPU ship together at one version: the upstream nuget.org preview
+# this closure is based on, followed by our own <publish run>.<attempt>. Every publish therefore
+# gets a new, higher version (0.1.0-preview.69.123.1 sorts above preview.69 and below preview.70)
+# instead of republishing over the upstream number, which NuGet caches cannot tell apart.
+# Update upstream_package_version when nuget.org moves on. CI sets the suffix from
+# github.run_number/run_attempt; a local run defaults to .0.0, below every published build.
+upstream_package_version="0.1.0-preview.69"
+package_version_suffix="${DIST_LOCAL_PACKAGE_VERSION_SUFFIX:-0.0}"
+if [[ ! "${package_version_suffix}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  echo "DIST_LOCAL_PACKAGE_VERSION_SUFFIX must be <number>.<number>, got '${package_version_suffix}'." >&2
+  exit 1
+fi
+dev_package_version="${upstream_package_version}.${package_version_suffix}"
+progpu_package_version="${dev_package_version}"
 for version in "${dev_package_version}" "${progpu_package_version}"; do
   if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
     echo "Invalid package version '${version}'." >&2
     exit 1
   fi
 done
+if [[ "${print_version}" == 1 ]]; then
+  echo "${dev_package_version}"
+  exit 0
+fi
 
 # section <title>: prints the stage banner and closes the previous stage's timer; the EXIT trap
 # prints the whole table, so a slow run says where its time went. SECONDS is a builtin - no fork.

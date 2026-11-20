@@ -1,6 +1,6 @@
 name: Publish LibreWPF GitHub Packages
 
-# Publish one Windows, Linux, and macOS closure at the same versions as nuget.org.
+# Publish one Windows, Linux, and macOS closure at the nuget.org upstream version plus this run's suffix.
 # WPF remains Windows-only; the Linux slices are native ProGPU assets for consumers
 # that select those RIDs from the shared package closure.
 on:
@@ -22,6 +22,12 @@ concurrency:
 permissions:
   contents: read
   packages: write
+
+# Every publish gets its own version: dist.local.sh appends this to the upstream nuget.org version
+# (0.1.0-preview.69 -> 0.1.0-preview.69.<run>.<attempt>). A re-run gets a new attempt number, so it
+# never collides with packages an earlier attempt already uploaded.
+env:
+  DIST_LOCAL_PACKAGE_VERSION_SUFFIX: ${{ github.run_number }}.${{ github.run_attempt }}
 
 jobs:
   # Checks the submodule pointers this push commits (tools/preflight-publish.sh) in a minute, because the
@@ -429,7 +435,7 @@ jobs:
           PROGPU_PACKAGE_OUTPUT: ${{ runner.temp }}/progpu-mobile-feed
           PROGPU_PACKAGE_GROUP: mobile
         run: |
-          LibreWPF/external/ProGPU/eng/progpu-pack.sh
+          PROGPU_PACKAGE_VERSION="$(./dist.local.sh --print-version)" LibreWPF/external/ProGPU/eng/progpu-pack.sh
           cp "${PROGPU_PACKAGE_OUTPUT}"/*.nupkg "${RUNNER_TEMP}/librewpf-github-feed/"
       - name: Verify LibreWPF.Sdk remains consumable by .NET 10
         shell: bash
@@ -508,17 +514,11 @@ jobs:
           DIST_LOCAL_FEED: ${{ runner.temp }}/librewpf-github-feed
         run: |
           shopt -s nullglob
-          # dist.local.sh owns the version, so read it instead of repeating the literal here: a bump
-          # on nuget.org must not leave this step looking for packages the build no longer produces.
-          package_version="$(sed -n 's/^dev_package_version="\([^"]*\)"$/\1/p' dist.local.sh)"
-          progpu_version="$(sed -n 's/^progpu_package_version="\([^"]*\)"$/\1/p' dist.local.sh)"
+          # dist.local.sh owns the version (one version for the whole closure, upstream plus this
+          # run's suffix), so ask it instead of repeating the literal here.
+          package_version="$(./dist.local.sh --print-version)"
           if [[ -z "${package_version}" ]]; then
-            echo "Unable to read dev_package_version from dist.local.sh." >&2
-            exit 1
-          fi
-          # One closure means one version; the ProGPU IDs below are checked at the LibreWPF version.
-          if [[ "${package_version}" != "${progpu_version}" ]]; then
-            echo "dist.local.sh publishes LibreWPF at '${package_version}' and ProGPU at '${progpu_version}', but this step publishes a single closure." >&2
+            echo "Unable to read the package version from dist.local.sh." >&2
             exit 1
           fi
           packages=("${DIST_LOCAL_FEED}"/*."${package_version}".nupkg)
