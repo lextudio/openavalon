@@ -117,6 +117,22 @@ jobs:
           key: progpu-ccache-${{ matrix.rid }}-ccache4.14.2-${{ hashFiles('LibreWPF/external/ProGPU/src/ProGPU.Native/**', 'LibreWPF/external/ProGPU/eng/build-progpu-native-windows.ps1', 'LibreWPF/external/ProGPU/eng/native-freetype.json', 'LibreWPF/external/ProGPU/eng/native-edit-word-icu.json') }}
           restore-keys: |
             progpu-ccache-${{ matrix.rid }}-ccache4.14.2-
+      # dist.local.sh skips a stage whose receipt still matches its input fingerprint and whose
+      # outputs exist, but every run starts from an empty checkout, so the ~45-minute ARM64 and
+      # ~30-minute x64 native stage (compile, CTest, benchmarks) ran even when ProGPU.Native was
+      # unchanged. Carry the receipts and staged outputs across runs. The receipt re-checks the
+      # fingerprint itself, so a restore from an older key only means the stage rebuilds.
+      - name: Cache staged native payloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            artifacts/dist-receipts/native-${{ matrix.rid }}.receipt
+            artifacts/dist-receipts/dx12-${{ matrix.rid }}.receipt
+            LibreWPF/external/ProGPU/artifacts/progpu-native/package/runtimes/${{ matrix.rid }}
+            LibreWPF/external/ProGPU/artifacts/progpu-dx12/package/${{ matrix.rid }}
+          key: progpu-native-stage-${{ matrix.rid }}-${{ hashFiles('LibreWPF/external/ProGPU/src/ProGPU.Native/**', 'LibreWPF/external/ProGPU/eng/**') }}
+          restore-keys: |
+            progpu-native-stage-${{ matrix.rid }}-
       - name: Build the Windows native payload
         shell: bash
         # The ProGPU script resolves dumpbin.exe from this runner's selected

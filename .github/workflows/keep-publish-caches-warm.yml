@@ -1,0 +1,59 @@
+name: Keep publish caches warm
+
+# GitHub evicts an Actions cache that nobody restores for 7 days, and publish runs are often further
+# apart than that (2026-11-10 -> 2026-11-19 lost every cache, so the next run rebuilt the Windows
+# native payloads from scratch and its ccache hit 4%). Restoring each cache refreshes its
+# last-access time. This job only restores; it never builds or saves anything.
+#
+# A cache is only restorable with the same paths, so the `path` lists below must stay identical to
+# the ones in publish-librewpf-github-packages.yml. The keys are deliberately ones that never exist:
+# restore-keys then picks the newest cache with that prefix.
+on:
+  schedule:
+    - cron: '17 3 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  touch-windows-native-caches:
+    name: Touch ${{ matrix.rid }} caches
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+          - rid: win-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Touch staged native payloads
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            artifacts/dist-receipts/native-${{ matrix.rid }}.receipt
+            artifacts/dist-receipts/dx12-${{ matrix.rid }}.receipt
+            LibreWPF/external/ProGPU/artifacts/progpu-native/package/runtimes/${{ matrix.rid }}
+            LibreWPF/external/ProGPU/artifacts/progpu-dx12/package/${{ matrix.rid }}
+          key: progpu-native-stage-${{ matrix.rid }}-keepalive
+          restore-keys: |
+            progpu-native-stage-${{ matrix.rid }}-
+      - name: Touch native compiler objects
+        uses: actions/cache/restore@v4
+        with:
+          path: LibreWPF/external/ProGPU/artifacts/progpu-ccache
+          key: progpu-ccache-${{ matrix.rid }}-ccache4.14.2-keepalive
+          restore-keys: |
+            progpu-ccache-${{ matrix.rid }}-ccache4.14.2-
+      - name: Touch pinned DX12 downloads
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            LibreWPF/external/ProGPU/artifacts/progpu-dx12/download/${{ matrix.rid }}
+            LibreWPF/external/ProGPU/artifacts/wgpu-native-windows/${{ matrix.rid }}
+          key: progpu-dx12-downloads-${{ matrix.rid }}-keepalive
+          restore-keys: |
+            progpu-dx12-downloads-${{ matrix.rid }}-
