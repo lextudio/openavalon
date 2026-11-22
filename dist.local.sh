@@ -924,6 +924,9 @@ pack_wpf_project "src/ProGPU.Wpf/ProGPU.Wpf.csproj" "LibreWPF.ProGPU" "${dev_pac
 # instead of the default hard-coded in the SDK project.
 pack_wpf_project "packaging/ProGPU.Wpf.Sdk/ProGPU.Wpf.Sdk.ArchNeutral.csproj" "LibreWPF.Sdk" "${dev_package_version}" \
   -p:ProGpuPackageVersion="${progpu_package_version}"
+# The optional XAML source generator (UseLibreWpfXamlSourceGenerator=true): a Roslyn analyzer
+# package (netstandard2.0, analyzers/dotnet/cs), versioned with the rest of the closure.
+pack_wpf_project "src/LibreWPF.Xaml.SourceGenerator/LibreWPF.Xaml.SourceGenerator.csproj" "LibreWPF.Xaml.SourceGenerator" "${dev_package_version}"
 
 section "Packing LibreWinForms packages"
 # This closure runs one SDK family: whichever the host carries, rc.2 or newer. Arcade's
