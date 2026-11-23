@@ -7,8 +7,35 @@ namespace XsgAot;
 /// <summary>What the prototype proves, printed as name=value lines and a final PASS/FAIL.</summary>
 internal static class SelfCheck
 {
+    /// <summary>The visual tree as lines of "depth type width x height": the same window in the JIT build (BAML Aero2) and in the
+    /// NativeAOT build (Aero2 compiled by XSG) must print the same tree.</summary>
+    public static void Dump(DependencyObject root, int depth = 0)
+    {
+        var size = root is FrameworkElement fe ? $"{fe.ActualWidth:0.#}x{fe.ActualHeight:0.#}" : "-";
+        Console.WriteLine($"{new string(' ', depth * 2)}{root.GetType().Name} {size}");
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            Dump(VisualTreeHelper.GetChild(root, i), depth + 1);
+        }
+    }
+
     public static void Run(MainWindow window)
     {
+        if (Environment.GetEnvironmentVariable("XSGAOT_CONVERTERS") == "1")
+        {
+            Console.WriteLine($"IsDynamicCodeSupported={System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported}");
+            foreach (var t in new[] { typeof(bool), typeof(int), typeof(double), typeof(string), typeof(Visibility), typeof(Thickness) })
+            {
+                Console.WriteLine($"TypeDescriptor.GetConverter({t.Name}) = {System.ComponentModel.TypeDescriptor.GetConverter(t).GetType().FullName}");
+            }
+        }
+
+        if (Environment.GetEnvironmentVariable("XSGAOT_DUMP") == "1")
+        {
+            Dump(window);
+            return;
+        }
+
         var ok = true;
         void Check(string name, bool condition, string detail)
         {
@@ -47,6 +74,11 @@ internal static class SelfCheck
         var path = System.Windows.Data.BindingOperations.GetBinding(nameBox, TextBox.TextProperty)?.Path;
         Check("binding is compiled", path?.PathParameters.Count == 2 && path.PathParameters[0] is System.ComponentModel.PropertyDescriptor,
             $"path='{path?.Path}' parameters={path?.PathParameters.Count}");
+
+        // 4. A template node that needs code the factory cannot express (Grid.RowDefinitions): filled by the factory's initializer.
+        var gridButton = (Button)window.FindName("Grid")!;
+        var layout = gridButton.Template?.FindName("layout", gridButton) as Grid;
+        Check("template initializer", layout is { RowDefinitions.Count: 2 }, $"rows={layout?.RowDefinitions.Count} height0={layout?.RowDefinitions[0].Height}");
 
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;

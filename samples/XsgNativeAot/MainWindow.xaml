@@ -3,11 +3,42 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:XsgAot"
         x:DataType="vm:MainViewModel"
-        Title="XSG NativeAOT" Width="420" Height="240">
+        Title="XSG NativeAOT" Width="420" Height="640">
   <StackPanel Background="White">
     <TextBlock x:Name="Status" Text="hello from XSG" FontSize="24" Foreground="Black" />
     <TextBlock x:Name="Greeting" Text="{Binding Person.Greeting}" />
     <TextBox x:Name="NameBox" Text="{Binding Person.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
     <Button x:Name="Action" Content="A button" />
+    <CheckBox Content="a check box" IsChecked="True" />
+    <RadioButton Content="a radio button" />
+    <ComboBox x:Name="Combo" SelectedIndex="0">
+      <ComboBoxItem Content="first" />
+      <ComboBoxItem Content="second" />
+    </ComboBox>
+    <ListBox Height="60">
+      <ListBoxItem Content="one" />
+      <ListBoxItem Content="two" />
+    </ListBox>
+    <Slider Minimum="0" Maximum="10" Value="3" />
+    <ProgressBar Value="40" Height="12" />
+    <ScrollBar Orientation="Horizontal" />
+    <TabControl Height="50">
+      <TabItem Header="tab one" />
+      <TabItem Header="tab two" />
+    </TabControl>
+    <Button x:Name="Grid" Content="grid template">
+      <Button.Template>
+        <ControlTemplate TargetType="Button">
+          <Grid x:Name="layout">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="header" />
+            <ContentPresenter Grid.Row="1" />
+          </Grid>
+        </ControlTemplate>
+      </Button.Template>
+    </Button>
   </StackPanel>
 </Window>

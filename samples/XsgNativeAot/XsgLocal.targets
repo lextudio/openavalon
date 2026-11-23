@@ -7,6 +7,7 @@
     <CompilerVisibleProperty Include="LibreWpfCompiledBindings" />
     <CompilerVisibleProperty Include="MSBuildProjectDirectory" />
     <CompilerVisibleProperty Include="LibreWpfXsgResourceAssemblyName" />
+    <CompilerVisibleProperty Include="LibreWpfXsgExcludeTargetTypes" />
     <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="Link" />
   </ItemGroup>
 </Project>

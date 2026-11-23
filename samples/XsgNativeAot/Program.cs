@@ -31,6 +31,20 @@ public static class Program
         {
             window.ContentRendered += (_, _) => window.Dispatcher.BeginInvoke(() =>
             {
+                if (Environment.GetEnvironmentVariable("XSGAOT_CAPTURE") is { Length: > 0 } capturePath)
+                {
+                    // Let the GPU present a few frames, then save this process's own window.
+                    var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                    timer.Tick += (_, _) =>
+                    {
+                        timer.Stop();
+                        Console.WriteLine("capture=" + MacWindowCapture.Save(capturePath, window.Title));
+                        app.Shutdown();
+                    };
+                    timer.Start();
+                    return;
+                }
+
                 try
                 {
                     SelfCheck.Run(window);

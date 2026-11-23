@@ -1,7 +1,8 @@
 # XSG + NativeAOT prototype
 
 A LibreWPF app published with **NativeAOT** on macOS (osx-arm64): one native Mach-O executable, no JIT, no BAML, no System.Xaml
-at run time. XAML is compiled by the LibreWPF XAML source generator (XSG), including the theme and the bindings.
+at run time. XAML is compiled by the LibreWPF XAML source generator (XSG), including the bindings and **the real in-box Aero2 theme**
+(`Theme/` links `Aero2.NormalColor.xaml` from the LibreWPF checkout; it is not a copy and not a hand-written stand-in).
 
 **Package source.** `NuGet.config` takes the OpenAvalon packages (`LibreWPF.*`, `LibreWinForms.*`, `ProGPU.*`) from the OpenDevelop checkout
 beside this repository: `../../../OpenDevelop/artifacts/openavalon-feed`, the folder OpenDevelop fills with `pwsh ./sync-openavalon-feed.ps1`.
@@ -29,6 +30,26 @@ ok   binding is compiled: path='(0).(1)' parameters=2
 PASS
 ```
 
+`./compare-jit-aot.sh` runs the same window (ten controls: Button, CheckBox, RadioButton, ComboBox, ListBox, Slider, ProgressBar, ScrollBar,
+TabControl, a custom template) in the JIT build, which uses the in-box BAML Aero2, and in the NativeAOT build, which uses Aero2 compiled by XSG, and
+diffs the visual trees (type and size of every element). Result: **129 elements in both, identical**, except that the outermost client-area height
+is 612 in JIT and 608 in AOT (the native window frame; nothing inside the window differs).
+
+**Pixels** (`./compare-pixels.sh`, screenshots in `screenshots/`): the same window rendered by the JIT build (BAML Aero2) and by the NativeAOT
+build (Aero2 compiled by XSG). Aligned on the content (the title bars are not compared), **no pixel differs by more than 1/255 in any channel**
+(in the last run all 924,000 compared pixels were exactly equal; an earlier run had about 0.4% of them one level apart, in the TextBox and
+ListBox edge rows: the frame it caught); the contents are identical. The title bars differ because macOS draws the frame of a binary by the SDK it was linked with (the JIT
+apphost: SDK 15.5, classic grey bar with a centred title; the NativeAOT executable: SDK 27.0, the new taller bar with the title on the left),
+which is also the 4 pt (612 vs 608) of client height in the visual-tree diff above. Screenshots need an unlocked screen (a locked session is not composited and every capture is blank: `compare-pixels.sh` refuses to run then)
+and are taken by the app itself
+(`MacWindowCapture`, `XSGAOT_CAPTURE=<png>` with `check`): a process may capture its own windows without the Screen Recording permission;
+`screencapture`, another process, and DevFlow's `/api/v1/ui/screenshot` (it goes through `RenderTargetBitmap`, which needs the Windows-only
+`wpfgfx_cor3`) cannot.
+
+DevFlow (`LeXtudio.DevFlow.Agent.LibreWpf` 0.3.1, tried here by adding the package and `AddWpfDevFlowAgent`; not kept in the sample): under JIT its
+status, actions and tree work. Under NativeAOT its HTTP server starts but every request fails with "Reflection-based serialization has been disabled" (`System.Text.Json` without a
+source-generated context): the agent itself is not NativeAOT-compatible yet.
+
 ## What makes it work
 
 | Problem under NativeAOT | What failed | Fix |
@@ -38,6 +59,11 @@ PASS
 | Reflective bindings | `PropertyPathWorker` resolves `{Binding A.B}` with reflection over the source type. | **Compiled bindings** (`LibreWpfCompiledBindings`, under `x:DataType`): each path step is a generated `PropertyDescriptor` with typed delegates, passed as an early-bound `PropertyPath` parameter; the stock binding engine needs no change. |
 | Window creation | Silk.NET finds its GLFW platform by loading an assembly by name and `Activator.CreateInstance` ("Couldn't find a suitable window platform"). | `ProGpuWpfWindowHost` registers `GlfwWindowing`/`GlfwInput` explicitly before the first window. |
 | SDK refuses | `NETSDK1168: WPF is not supported ... with trimming enabled`. | `_SuppressWpfTrimError=true`. |
+| Real Aero2 does not build as a theme | `UseWPF` references every in-box theme assembly, several define `SystemDropShadowChrome`. | The theme project keeps only the Aero2 reference (`KeepOnlyAero2Theme` target). |
+| Document viewers cannot load | `System.Printing` is C++/CLI and Windows-only; its portable implementation has 1 of 56 public types. ILC replaces every method that needs `XpsDocumentWriter` (`DocumentViewerBase`, `FlowDocumentReader`, ...) with a throwing stub, including the theme's `InitializeComponent`. | Printing stays Windows-only: `LibreWpfXsgExcludeTargetTypes` (comma-separated: a `;` starts an .editorconfig comment) leaves the styles of `DocumentViewer`, `FlowDocument*`, `FixedDocument*` out of this theme. |
+| Templates need more than `SetValue` | `FrameworkElementFactory` sets dependency properties only. | Three additive hooks: `SetInitializer` (fill a collection / set an object property after creation), `SetAttacher` (`Track.Thumb`, named `RowDefinition`s: the item is a real, named, targetable template node), `SetCreator` (`new T()` instead of `Activator.CreateInstance`). The content property written as an element (`<Border.Child>`) becomes an ordinary factory child. |
+| A DataTrigger's `Value="True"` | `DefaultValueConverter.GetConverter` goes through the BAML known-type table, which `Activator`-creates `BooleanConverter`. | Under NativeAOT only (`RuntimeFeature.IsDynamicCodeSupported` is false) it uses `TypeDescriptor`'s intrinsic converters first. |
+| `StaticResource` of a key defined in a local `.Resources` | The key exists on the instance / style, not in the theme dictionary. | Looked up when applied (`SetResourceReference`, `DynamicResourceExtension`); `Style.Resources` / `ControlTemplate.Resources` / `Grid.Resources` are generated, and the generated dictionary keeps a scope stack for what is being built. |
 
 ## Prototype shortcuts (what is not product yet)
 
@@ -45,10 +71,15 @@ PASS
   `packages/` folder (never the shared feed or NuGet cache); `./prepare.sh --restore` undoes it. Both changes ship with the next
   LibreWPF publish, after which `prepare.sh` is unnecessary.
 - `XsgLocal.targets` uses the generator from the checkout and declares the compiler-visible switches the next SDK ships.
-- `Theme/` covers only `Window` and `Button`. A full XSG build of `PresentationFramework.Aero2` (and the other in-box themes) needs
-  generator coverage this prototype does not have yet (MultiTrigger/DataTrigger, storyboards, `Style.Resources`, …).
+- `Theme/` builds the one theme that this window uses, Aero2, as a separate project that stands in for `PresentationFramework.Aero2` by
+  name. The in-box theme assemblies themselves still carry BAML, and the other themes (Classic, Fluent, AeroLite, Luna, Royale) have not been
+  run. The document viewers are left out of this theme on purpose (printing is Windows-only); each theme needs its own such list.
 - The theme assembly must be rooted by hand; the SDK should root XSG theme assemblies automatically.
-- Not verified here: pixels on screen (screen capture is not permitted from the build shell, and `RenderTargetBitmap` needs the
-  Windows `wpfgfx` in JIT and AOT alike). Run the binary without `check` to look at it.
+- ILC lists 13 more methods that "will always throw" in `ProGPU.Wpf`: members of PresentationCore it calls that do not exist there
+  (`GlyphRun..ctor(TtfFont, ...)`, `GlyphRun.FontSize` / `GlyphIndices`, `DrawingContext..ctor(ProGPU.Scene.DrawingContext)`,
+  `DashStyle..ctor(double[], double)`, `FontFamily.NativeFont`, `BitmapSource.GpuTexture`). Checked: this window draws all its text, borders,
+  gradients and controls identically to the JIT build (the pixel comparison above), so none of them is on the path these controls take, including
+  `ProGpuCompositionCommandSink.DrawGlyphRun`. Not exercised by this window: images (`BitmapSource.GpuTexture`), dashed pens (`DashStyle`),
+  drawing contexts created from ProGPU scenes, `FontFamily.NativeFont`; they stay open until something draws them.
 - ILC still reports trim/AOT analysis warnings (`IL3053`) for WindowsBase, PresentationCore, PresentationFramework, System.Xaml;
   paths this app does not use (XAML/BAML loading, `TextRange` serialization, …) were not exercised.
