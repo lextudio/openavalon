@@ -16,6 +16,9 @@
   <ItemGroup>
     <Compile Remove="Theme/**" />
     <AdditionalFiles Include="MainWindow.xaml" />
+    <AdditionalFiles Include="App.xaml" />
+    <AdditionalFiles Include="Card.xaml" />
+    <AdditionalFiles Include="Styles/Brushes.xaml" />
     <ProjectReference Include="Theme/XsgAot.Theme.csproj" />
     <!-- NativeAOT runs the module initializer (the theme registration) only of an assembly that is part of the graph. -->
     <TrimmerRootAssembly Include="XsgAot.Theme" />

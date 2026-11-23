@@ -80,6 +80,17 @@ internal static class SelfCheck
         var layout = gridButton.Template?.FindName("layout", gridButton) as Grid;
         Check("template initializer", layout is { RowDefinitions.Count: 2 }, $"rows={layout?.RowDefinitions.Count} height0={layout?.RowDefinitions[0].Height}");
 
+        // 5. What a real application has: App.xaml with a StartupUri (no BAML to load the window from), a merged dictionary by Source, and
+        //    a UserControl with its own XAML that uses App.xaml's resources.
+        Check("startup uri", ReferenceEquals(Application.Current.MainWindow, window), $"MainWindow is {Application.Current.MainWindow?.GetType().Name}");
+        var accent = Application.Current.Resources["AccentBrush"] as System.Windows.Media.SolidColorBrush;
+        Check("merged dictionary", accent?.Color == System.Windows.Media.Color.FromRgb(0x33, 0x66, 0xCC)
+            && Application.Current.Resources["CardPadding"] is Thickness { Left: 8, Top: 4 }, $"AccentBrush={accent?.Color} CardPadding={Application.Current.Resources["CardPadding"]}");
+        var card = (Card)window.FindName("TheCard")!;
+        var cardBorder = card.Content as Border;
+        Check("user control", card.Title.StartsWith("a user control") && cardBorder?.Background is System.Windows.Media.SolidColorBrush { Color: { R: 0xEE, G: 0xF3, B: 0xFB } },
+            $"title='{card.Title}' background={cardBorder?.Background}");
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }

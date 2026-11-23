@@ -16,23 +16,27 @@ bin/Release/net10.0-windows/osx-arm64/publish/XsgAot          # the window
 bin/Release/net10.0-windows/osx-arm64/publish/XsgAot check    # self-check, prints PASS/FAIL and exits
 ```
 
-`check` output on 2026-11-23 (Apple silicon, Xcode SDK via `SDKROOT`):
+`check` output on 2026-11-23 (Apple silicon, Xcode SDK via `SDKROOT`; the window is the sample's `MainWindow` with the real Aero2 theme):
 
 ```text
 nativeaot=True
 ok   window template: Border > AdornerDecorator
-ok   layout: 420x208
-ok   button template: border=420x19.798828125 background=#FFDDDDDD
+ok   layout: 420x608
+ok   button template: border=420x17.798828125 background=#FFDDDDDD
 ok   binding source->target: greeting='Hello, Ada' name='Ada'
 ok   binding INPC update: greeting='Hello, Grace' name='Grace'
 ok   binding TwoWay target->source: vm.Name='Linus' greeting='Hello, Linus'
 ok   binding is compiled: path='(0).(1)' parameters=2
+ok   template initializer: rows=2 height0=Auto
+ok   startup uri: MainWindow is MainWindow
+ok   merged dictionary: AccentBrush=#FF3366CC CardPadding=8,4,8,4
+ok   user control: title='a user control, styled from App.xaml resources' background=#FFEEF3FB
 PASS
 ```
 
-`./compare-jit-aot.sh` runs the same window (ten controls: Button, CheckBox, RadioButton, ComboBox, ListBox, Slider, ProgressBar, ScrollBar,
-TabControl, a custom template) in the JIT build, which uses the in-box BAML Aero2, and in the NativeAOT build, which uses Aero2 compiled by XSG, and
-diffs the visual trees (type and size of every element). Result: **129 elements in both, identical**, except that the outermost client-area height
+`./compare-jit-aot.sh` runs the same window (a UserControl from its own XAML plus Button, CheckBox, RadioButton, ComboBox, ListBox, Slider, ProgressBar,
+ScrollBar, TabControl, a custom template) in the JIT build, which uses the in-box BAML Aero2, and in the NativeAOT build, which uses Aero2 compiled by XSG, and
+diffs the visual trees (type and size of every element). Result: **134 elements in both, identical**, except that the outermost client-area height
 is 612 in JIT and 608 in AOT (the native window frame; nothing inside the window differs).
 
 **Pixels** (`./compare-pixels.sh`, screenshots in `screenshots/`): the same window rendered by the JIT build (BAML Aero2) and by the NativeAOT
@@ -50,6 +54,10 @@ DevFlow (`LeXtudio.DevFlow.Agent.LibreWpf` 0.3.1, tried here by adding the packa
 status, actions and tree work. Under NativeAOT its HTTP server starts but every request fails with "Reflection-based serialization has been disabled" (`System.Text.Json` without a
 source-generated context): the agent itself is not NativeAOT-compatible yet.
 
+The window is created by `App.xaml`'s `StartupUri`, `App.xaml` merges `Styles/Brushes.xaml` with `Source=`, and `Card.xaml` is a `UserControl` of
+its own: the three things a real application has that a lone window does not. None of them can be loaded from a resource under NativeAOT; see
+"Application, `StartupUri` and `Source`" in LibreWPF's `Documentation/XamlSourceGeneratorUsage.md`.
+
 ## What makes it work
 
 | Problem under NativeAOT | What failed | Fix |
@@ -62,6 +70,7 @@ source-generated context): the agent itself is not NativeAOT-compatible yet.
 | Real Aero2 does not build as a theme | `UseWPF` references every in-box theme assembly, several define `SystemDropShadowChrome`. | The theme project keeps only the Aero2 reference (`KeepOnlyAero2Theme` target). |
 | Document viewers cannot load | `System.Printing` is C++/CLI and Windows-only; its portable implementation has 1 of 56 public types. ILC replaces every method that needs `XpsDocumentWriter` (`DocumentViewerBase`, `FlowDocumentReader`, ...) with a throwing stub, including the theme's `InitializeComponent`. | Printing stays Windows-only: `LibreWpfXsgExcludeTargetTypes` (comma-separated: a `;` starts an .editorconfig comment) leaves the styles of `DocumentViewer`, `FlowDocument*`, `FixedDocument*` out of this theme. |
 | Templates need more than `SetValue` | `FrameworkElementFactory` sets dependency properties only. | Three additive hooks: `SetInitializer` (fill a collection / set an object property after creation), `SetAttacher` (`Track.Thumb`, named `RowDefinition`s: the item is a real, named, targetable template node), `SetCreator` (`new T()` instead of `Activator.CreateInstance`). The content property written as an element (`<Border.Child>`) becomes an ordinary factory child. |
+| `StartupUri`, `ResourceDictionary Source=`, `UserControl` | BAML resolves them at run time with `Application.LoadComponent` and pack URIs: no resource to read. | Each `x:Class` root object except the `Application` (a window, page or user control that can be created without arguments) is registered by resource path (`RegisterComponent`) and `LoadComponent(Uri)` asks that registry first; `Source` is resolved at build time to a registry lookup; `Uri` values are typed. |
 | A DataTrigger's `Value="True"` | `DefaultValueConverter.GetConverter` goes through the BAML known-type table, which `Activator`-creates `BooleanConverter`. | Under NativeAOT only (`RuntimeFeature.IsDynamicCodeSupported` is false) it uses `TypeDescriptor`'s intrinsic converters first. |
 | `StaticResource` of a key defined in a local `.Resources` | The key exists on the instance / style, not in the theme dictionary. | Looked up when applied (`SetResourceReference`, `DynamicResourceExtension`); `Style.Resources` / `ControlTemplate.Resources` / `Grid.Resources` are generated, and the generated dictionary keeps a scope stack for what is being built. |
 

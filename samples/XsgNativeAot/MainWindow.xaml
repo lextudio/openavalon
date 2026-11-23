@@ -2,12 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:XsgAot"
+        xmlns:local="clr-namespace:XsgAot"
         x:DataType="vm:MainViewModel"
         Title="XSG NativeAOT" Width="420" Height="640">
   <StackPanel Background="White">
     <TextBlock x:Name="Status" Text="hello from XSG" FontSize="24" Foreground="Black" />
     <TextBlock x:Name="Greeting" Text="{Binding Person.Greeting}" />
     <TextBox x:Name="NameBox" Text="{Binding Person.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+    <local:Card x:Name="TheCard" Title="a user control, styled from App.xaml resources" />
     <Button x:Name="Action" Content="A button" />
     <CheckBox Content="a check box" IsChecked="True" />
     <RadioButton Content="a radio button" />

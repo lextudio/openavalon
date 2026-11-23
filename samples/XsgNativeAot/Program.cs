@@ -25,39 +25,43 @@ public static class Program
             };
         }
 
-        var app = new Application();
-        var window = new MainWindow();
+        var app = new App();
         if (args.Contains("check"))
         {
-            window.ContentRendered += (_, _) => window.Dispatcher.BeginInvoke(() =>
+            // The window is created by App.xaml's StartupUri during Run: hook it as soon as the dispatcher is running.
+            app.Dispatcher.BeginInvoke(() =>
             {
-                if (Environment.GetEnvironmentVariable("XSGAOT_CAPTURE") is { Length: > 0 } capturePath)
+                var window = (MainWindow)app.MainWindow;
+                window.ContentRendered += (_, _) => window.Dispatcher.BeginInvoke(() =>
                 {
-                    // Let the GPU present a few frames, then save this process's own window.
-                    var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                    timer.Tick += (_, _) =>
+                    if (Environment.GetEnvironmentVariable("XSGAOT_CAPTURE") is { Length: > 0 } capturePath)
                     {
-                        timer.Stop();
-                        Console.WriteLine("capture=" + MacWindowCapture.Save(capturePath, window.Title));
-                        app.Shutdown();
-                    };
-                    timer.Start();
-                    return;
-                }
+                        // Let the GPU present a few frames, then save this process's own window.
+                        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                        timer.Tick += (_, _) =>
+                        {
+                            timer.Stop();
+                            Console.WriteLine("capture=" + MacWindowCapture.Save(capturePath, window.Title));
+                            app.Shutdown();
+                        };
+                        timer.Start();
+                        return;
+                    }
 
-                try
-                {
-                    SelfCheck.Run(window);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("self-check failed: " + ex);
-                    Environment.ExitCode = 1;
-                }
-                app.Shutdown(Environment.ExitCode);
-            }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    try
+                    {
+                        SelfCheck.Run(window);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("self-check failed: " + ex);
+                        Environment.ExitCode = 1;
+                    }
+                    app.Shutdown(Environment.ExitCode);
+                }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            });
         }
 
-        return app.Run(window);
+        return app.Run();
     }
 }
