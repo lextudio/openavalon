@@ -1,0 +1,12 @@
+<Project>
+  <!-- Prototype only: the XAML source generator from the LibreWPF checkout (not the published package), and the compiler-visible
+       switches the next LibreWPF.Sdk ships in ProGPU.Wpf.Sdk.XamlSourceGeneratorFeatures.targets. -->
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../LibreWPF/src/LibreWPF.Xaml.SourceGenerator/LibreWPF.Xaml.SourceGenerator.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" SetConfiguration="Configuration=Debug" />
+    <CompilerVisibleProperty Include="LibreWpfCompiledBindings" />
+    <CompilerVisibleProperty Include="MSBuildProjectDirectory" />
+    <CompilerVisibleProperty Include="LibreWpfXsgResourceAssemblyName" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="Link" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,24 @@
+<Project Sdk="LibreWPF.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <UseLibreWpfXamlSourceGenerator>true</UseLibreWpfXamlSourceGenerator>
+    <ProGpuWpfUseWpfMarkup>false</ProGpuWpfUseWpfMarkup>
+    <ImportFrameworkWinFXTargets>true</ImportFrameworkWinFXTargets>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>true</PublishAot>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <_SuppressWpfTrimError>true</_SuppressWpfTrimError>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Theme/**" />
+    <AdditionalFiles Include="MainWindow.xaml" />
+    <ProjectReference Include="Theme/XsgAot.Theme.csproj" />
+    <!-- NativeAOT runs the module initializer (the theme registration) only of an assembly that is part of the graph. -->
+    <TrimmerRootAssembly Include="XsgAot.Theme" />
+  </ItemGroup>
+  <Import Project="XsgLocal.targets" />
+</Project>

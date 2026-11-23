@@ -1,0 +1,19 @@
+<Project Sdk="LibreWPF.Sdk">
+  <!-- A theme compiled by the XAML source generator: no BAML. It registers its dictionary under PresentationFramework.Aero2's
+       theme resource, so WPF's theme lookup finds it even where that assembly cannot be loaded (NativeAOT). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseLibreWpfXamlSourceGenerator>true</UseLibreWpfXamlSourceGenerator>
+    <ProGpuWpfUseWpfMarkup>false</ProGpuWpfUseWpfMarkup>
+    <ImportFrameworkWinFXTargets>true</ImportFrameworkWinFXTargets>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <LibreWpfXsgResourceAssemblyName>PresentationFramework.Aero2</LibreWpfXsgResourceAssemblyName>
+  </PropertyGroup>
+  <Import Project="../XsgLocal.targets" />
+  <ItemGroup>
+    <AdditionalFiles Include="Themes/Aero2.NormalColor.xaml" />
+  </ItemGroup>
+</Project>
