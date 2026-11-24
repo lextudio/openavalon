@@ -92,6 +92,18 @@ its own: the three things a real application has that a lone window does not. No
 | A DataTrigger's `Value="True"` | `DefaultValueConverter.GetConverter` goes through the BAML known-type table, which `Activator`-creates `BooleanConverter`. | Under NativeAOT only (`RuntimeFeature.IsDynamicCodeSupported` is false) it uses `TypeDescriptor`'s intrinsic converters first. |
 | `StaticResource` of a key defined in a local `.Resources` | The key exists on the instance / style, not in the theme dictionary. | Looked up when applied (`SetResourceReference`, `DynamicResourceExtension`); `Style.Resources` / `ControlTemplate.Resources` / `Grid.Resources` are generated, and the generated dictionary keeps a scope stack for what is being built. |
 
+## Other in-box themes
+
+The theme project compiles an in-box theme (the table says which ones build) and registers it as Aero2's dictionary (the one this platform asks for):
+`dotnet publish -c Release -p:XsgThemeProject=Aero -p:XsgThemeFile=Aero.NormalColor` (default `Aero2` / `Aero2.NormalColor`). Measured (macOS arm64):
+
+| Theme | Generator + C# build | NativeAOT |
+|---|---|---|
+| Aero2 | 0 errors | the 20 checks |
+| AeroLite | 0 errors | publishes; all 20 checks pass |
+| Aero | 0 errors (needed two generator fixes: a Transform written as a matrix, an attached property with a prefixed namespace) | publishes and runs; 19 of the 20 checks pass, all except `button template`, which expects Aero2's template |
+| Luna, Royale, Classic | 2-3 errors: they use the internal dependency property `ComboBox.IsSelectionBoxHighlighted` (a reference assembly does not expose it) and Classic one `x:Shared="false"` brush | not built; Windows-only themes that stay in-box BAML on Windows |
+
 ## Prototype shortcuts (what is not product yet)
 
 - `prepare.sh` patches `PresentationFramework` (ref + lib) and `ProGPU.Wpf` from a local LibreWPF build into this sample's private
@@ -99,8 +111,8 @@ its own: the three things a real application has that a lone window does not. No
   LibreWPF publish, after which `prepare.sh` is unnecessary.
 - `XsgLocal.targets` uses the generator from the checkout and declares the compiler-visible switches the next SDK ships.
 - `Theme/` builds the one theme that this window uses, Aero2, as a separate project that stands in for `PresentationFramework.Aero2` by
-  name. The in-box theme assemblies themselves still carry BAML, and the other themes (Classic, Fluent, AeroLite, Luna, Royale) have not been
-  run. The document viewers are left out of this theme on purpose (printing is Windows-only); each theme needs its own such list.
+  name. The in-box theme assemblies themselves still carry BAML, and of the other themes AeroLite and Aero were run (see "Other in-box themes"); Classic, Luna and Royale do not build yet and Fluent was not tried (it needs its own
+  assembly's converters). The document viewers are left out of this theme on purpose (printing is Windows-only); each theme needs its own such list.
 - Only project references are rooted automatically; an XSG theme shipped in a package must root itself (its own `TrimmerRootAssembly` item).
 - ILC lists 13 more methods that "will always throw" in `ProGPU.Wpf`: members of PresentationCore it calls that do not exist there
   (`GlyphRun..ctor(TtfFont, ...)`, `GlyphRun.FontSize` / `GlyphIndices`, `DrawingContext..ctor(ProGPU.Scene.DrawingContext)`,

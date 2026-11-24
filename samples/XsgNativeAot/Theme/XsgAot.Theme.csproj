@@ -11,21 +11,30 @@
     <IsAotCompatible>true</IsAotCompatible>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <LibreWpfXsgResourceAssemblyName>PresentationFramework.Aero2</LibreWpfXsgResourceAssemblyName>
+    <!-- Which in-box theme is compiled (it is always registered as Aero2's dictionary, the one this platform asks for): -p:XsgThemeProject=Luna -p:XsgThemeFile=Luna.NormalColor -->
+    <XsgThemeProject Condition="'$(XsgThemeProject)' == ''">Aero2</XsgThemeProject>
+    <!-- The file follows the project (Aero2 -> Aero2.NormalColor; Classic's is just Classic); name it explicitly for any other pair. -->
+    <XsgThemeFile Condition="'$(XsgThemeFile)' == '' And '$(XsgThemeProject)' == 'Classic'">Classic</XsgThemeFile>
+    <XsgThemeFile Condition="'$(XsgThemeFile)' == ''">$(XsgThemeProject).NormalColor</XsgThemeFile>
     <!-- Printing is Windows-only (System.Printing is C++/CLI): the document viewers, which cannot load without it, get no style on this platform. -->
     <LibreWpfXsgExcludeTargetTypes>DocumentViewer,FlowDocumentReader,FlowDocumentScrollViewer,FlowDocumentPageViewer,FlowDocument,FixedDocument,FixedDocumentSequence</LibreWpfXsgExcludeTargetTypes>
   </PropertyGroup>
   <Import Project="../XsgLocal.targets" />
   <!-- UseWPF references every in-box theme assembly and several of them define the same types (SystemDropShadowChrome). The real
        Aero2 build has only its own; keep Aero2 (for Microsoft.Windows.Themes.*) and drop the rest from the compile references. -->
+  <Target Name="CheckThemeFile" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)../../../LibreWPF/src/Microsoft.DotNet.Wpf/src/Themes/PresentationFramework.$(XsgThemeProject)/Themes/$(XsgThemeFile).xaml')"
+           Text="No in-box theme file PresentationFramework.$(XsgThemeProject)/Themes/$(XsgThemeFile).xaml: set XsgThemeProject and XsgThemeFile to a pair that exists (for example Aero + Aero.NormalColor)." />
+  </Target>
   <Target Name="KeepOnlyAero2Theme" BeforeTargets="CoreCompile">
     <ItemGroup>
-      <_OtherTheme Include="@(ReferencePathWithRefAssemblies)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('PresentationFramework.')) And '%(Filename)' != 'PresentationFramework.Aero2'" />
+      <_OtherTheme Include="@(ReferencePathWithRefAssemblies)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('PresentationFramework.')) And '%(Filename)' != 'PresentationFramework.$(XsgThemeProject)'" />
       <ReferencePathWithRefAssemblies Remove="@(_OtherTheme)" />
     </ItemGroup>
   </Target>
   <ItemGroup>
     <!-- The real Aero2 theme dictionary, compiled by XSG instead of BAML. Its Link gives the resource path WPF asks for. -->
-    <AdditionalFiles Include="$(MSBuildThisFileDirectory)../../../LibreWPF/src/Microsoft.DotNet.Wpf/src/Themes/PresentationFramework.Aero2/Themes/Aero2.NormalColor.xaml"
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)../../../LibreWPF/src/Microsoft.DotNet.Wpf/src/Themes/PresentationFramework.$(XsgThemeProject)/Themes/$(XsgThemeFile).xaml"
                      Link="Themes/Aero2.NormalColor.xaml" />
   </ItemGroup>
 </Project>
