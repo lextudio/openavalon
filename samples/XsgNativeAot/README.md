@@ -38,12 +38,14 @@ ok   generic theme: template=applied text='new' background=#FF3366CC radius=8
 ok   generic theme trigger: disabled background=#FF808080
 ok   frame navigation: content=Page1 title='page one' body='page body'
 ok   misc: clicks=1 caption='click me' implicit='cat tom' keyed='dog rex' sorted=9,5,2 selector=cat a,dog b invalid=True valid=True
+ok   dashes, focus, effect: dashArray=2 focused=True
+ok   drawing context: drawn=True text:ok fallback:ok dash:ok dashes:ok image:ok geometry:ok
 PASS
 ```
 
 `./compare-jit-aot.sh` runs the same window (a UserControl from its own XAML plus Button, CheckBox, RadioButton, ComboBox, ListBox, Slider, ProgressBar,
 ScrollBar, TabControl, a custom template) in the JIT build, which uses the in-box BAML Aero2, and in the NativeAOT build, which uses Aero2 compiled by XSG, and
-diffs the visual trees (type and size of every element). Result: **134 elements in both, identical**, except that the outermost client-area height
+diffs the visual trees (type and size of every element). Result: **135 elements in both, identical**, except that the outermost client-area height
 is 612 in JIT and 608 in AOT (the native window frame; nothing inside the window differs).
 
 **Pixels** (`./compare-pixels.sh`, screenshots in `screenshots/`): the same window rendered by the JIT build (BAML Aero2) and by the NativeAOT
@@ -102,9 +104,11 @@ its own: the three things a real application has that a lone window does not. No
 - Only project references are rooted automatically; an XSG theme shipped in a package must root itself (its own `TrimmerRootAssembly` item).
 - ILC lists 13 more methods that "will always throw" in `ProGPU.Wpf`: members of PresentationCore it calls that do not exist there
   (`GlyphRun..ctor(TtfFont, ...)`, `GlyphRun.FontSize` / `GlyphIndices`, `DrawingContext..ctor(ProGPU.Scene.DrawingContext)`,
-  `DashStyle..ctor(double[], double)`, `FontFamily.NativeFont`, `BitmapSource.GpuTexture`). Checked: this window draws all its text, borders,
-  gradients and controls identically to the JIT build (the pixel comparison above), so none of them is on the path these controls take, including
-  `ProGpuCompositionCommandSink.DrawGlyphRun`. The window's `<Image>` (a decoded PNG from `.g.resources`) is drawn and is part of the identical pixels, so `BitmapSource.GpuTexture` is not on the path an `Image` takes either. Not exercised by this window: dashed pens (`DashStyle`),
-  drawing contexts created from ProGPU scenes, `FontFamily.NativeFont`; they stay open until something draws them.
+  `DashStyle..ctor(double[], double)`, `FontFamily.NativeFont`, `BitmapSource.GpuTexture`). The cause is the build, not NativeAOT: `ProGPU.Wpf` compiles against
+  `src/ProGPU.Compatibility/PresentationCore`, a separate ProGPU-native implementation that declares those members, while the portable PresentationCore that is deployed does not.
+  They are therefore dead in this lane. Checked (JIT and NativeAOT print the same): the window and `Gallery`/`Dynamics`/`Misc` views, and the `drawing context` check, which calls
+  `FormattedText` + `DrawText` (including an unknown font family, the `FontFamily.NativeFont` fallback), a `Pen` with a `DashStyle` (`new DashStyle(double[], double)` and `DashStyles.Dot`),
+  an `ImageBrush` (`BitmapSource`), a `Geometry`, and a `DropShadowEffect` in the `dashes, focus, effect` check: none reaches a missing member. Not exercised: `DrawGlyphRun` with a
+  hand-made `GlyphRun`, `ShaderEffect` samplers and `Viewport3D` textures (`GpuTexture`), drawing contexts created from ProGPU scenes.
 - ILC still reports trim/AOT analysis warnings (`IL3053`) for WindowsBase, PresentationCore, PresentationFramework, System.Xaml;
   paths this app does not use (XAML/BAML loading, `TextRange` serialization, …) were not exercised.

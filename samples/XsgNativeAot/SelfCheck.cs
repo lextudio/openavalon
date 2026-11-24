@@ -246,6 +246,46 @@ internal static class SelfCheck
             Check("misc", false, e.GetType().Name + ": " + e.Message);
         }
 
+        // 12. Things the ILC report lists as missing in ProGPU.Wpf: a dashed pen (StrokeDashArray), the keyboard focus rectangle, a drop shadow effect.
+        try
+        {
+            var panel = new StackPanel();
+            var dashed = new System.Windows.Shapes.Rectangle { Width = 40, Height = 20, Stroke = System.Windows.Media.Brushes.Black, StrokeDashArray = new System.Windows.Media.DoubleCollection { 2, 2 } };
+            var focusButton = new Button { Content = "focus" };
+            var shadowed = new Border { Width = 30, Height = 30, Background = System.Windows.Media.Brushes.White, Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4 } };
+            panel.Children.Add(dashed); panel.Children.Add(focusButton); panel.Children.Add(shadowed);
+            var host = new Window { Content = panel, Width = 200, Height = 200 };
+            host.Show();
+            host.UpdateLayout();
+            System.Windows.Input.Keyboard.Focus(focusButton);
+            System.Windows.Input.KeyboardNavigation.SetDirectionalNavigation(panel, System.Windows.Input.KeyboardNavigationMode.Continue);
+            host.UpdateLayout();
+            host.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => { }));
+            Check("dashes, focus, effect", dashed.StrokeDashArray.Count == 2 && dashed.ActualWidth == 40 && focusButton.IsKeyboardFocused, $"dashArray={dashed.StrokeDashArray.Count} focused={focusButton.IsKeyboardFocused}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("dashes, focus, effect", false, e.GetType().Name + ": " + e.Message);
+        }
+
+        // 13. Drawing APIs that look like users of the PresentationCore members ILC reports as missing in ProGPU.Wpf: FormattedText + DrawText (also an unknown font
+        //     family), dashed Pens, an ImageBrush and a Geometry, drawn by an element in a window. (DrawGlyphRun with a hand-made GlyphRun is not exercised.)
+        try
+        {
+            var visual = new DrawingVisualHost();
+            var host = new Window { Content = visual, Width = 300, Height = 200 };
+            host.Show();
+            host.UpdateLayout();
+            host.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => { }));
+            Check("drawing context", visual.Drawn && visual.Failures == 0, $"drawn={visual.Drawn} {visual.Detail}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("drawing context", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }
