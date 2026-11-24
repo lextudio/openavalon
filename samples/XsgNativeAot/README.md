@@ -104,6 +104,16 @@ The theme project compiles an in-box theme (the table says which ones build) and
 | Aero | 0 errors (needed two generator fixes: a Transform written as a matrix, an attached property with a prefixed namespace) | publishes and runs; 19 of the 20 checks pass, all except `button template`, which expects Aero2's template |
 | Luna, Royale, Classic | 2-3 errors: they use the internal dependency property `ComboBox.IsSelectionBoxHighlighted` (a reference assembly does not expose it) and Classic one `x:Shared="false"` brush | not built; Windows-only themes that stay in-box BAML on Windows |
 
+## Theme equivalence (the gate for compiling the in-box themes with XSG)
+
+`ThemeEquivalence/` loads the in-box **BAML** Aero2 dictionary and the **XSG-compiled** one in one JIT process and compares them: resource keys, `Style` (TargetType, BasedOn,
+setters, triggers, resources), `ControlTemplate`/`DataTemplate` (their own `.Resources` and the tree each instantiates with `LoadContent`: element types, local property values, bindings by path/mode/converter,
+resource references resolved through the XSG scopes), trigger conditions and values. `dotnet run -c Release` in that folder prints the differences and exits 1 when one is not explained.
+Measured: **376 keys compared, 4 differences, all one understood cause, 0 unexplained** (5 keys are left out on purpose: the document viewers, Windows-only printing).
+The cause: a `MenuItem` built as a `FrameworkElementFactory` node has no `LogicalParent`, so `MenuItem.Role` is `SubmenuItem` where BAML gives `TopLevelItem` (stock WPF behaviour of
+FEF templates, reproduced with a hand-written factory; `--menu-role` prints it). Only the `NavigationWindow` chrome menu is affected. Not compared deeply: the contents of
+`Storyboard`s in trigger actions (their counts are compared) and the behaviour of the templates once applied (the self-checks cover that for the controls they use).
+
 ## Prototype shortcuts (what is not product yet)
 
 - `prepare.sh` patches `PresentationFramework` (ref + lib) and `ProGPU.Wpf` from a local LibreWPF build into this sample's private

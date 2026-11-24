@@ -14,6 +14,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="Theme/**" />
+    <Compile Remove="ThemeEquivalence/**" />
     <AdditionalFiles Include="MainWindow.xaml" />
     <AdditionalFiles Include="App.xaml" />
     <AdditionalFiles Include="Card.xaml" />
