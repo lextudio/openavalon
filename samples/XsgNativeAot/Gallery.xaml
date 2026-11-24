@@ -1,0 +1,78 @@
+<UserControl x:Class="XsgAot.Gallery"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:XsgAot"
+             x:DataType="local:GalleryModel">
+  <DockPanel>
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_Open" />
+        <Separator />
+        <MenuItem Header="_Exit" />
+      </MenuItem>
+      <MenuItem Header="_View" IsCheckable="True" IsChecked="True" />
+    </Menu>
+    <ToolBarTray DockPanel.Dock="Top">
+      <ToolBar>
+        <Button Content="One" />
+        <ToggleButton Content="Two" />
+        <Separator />
+        <ComboBox Width="80"><ComboBoxItem Content="a" /><ComboBoxItem Content="b" /></ComboBox>
+      </ToolBar>
+    </ToolBarTray>
+    <StatusBar DockPanel.Dock="Bottom">
+      <StatusBarItem><TextBlock x:Name="Status" Text="ready" /></StatusBarItem>
+    </StatusBar>
+    <TabControl>
+      <TabItem Header="Data">
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+          <ListBox x:Name="Items" Grid.Column="0" ItemsSource="{Binding Rows}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="local:Row">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="{Binding Label}" Margin="0,0,8,0" />
+                  <CheckBox IsChecked="{Binding Done, Mode=TwoWay}" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <ListView x:Name="Table" Grid.Column="1" ItemsSource="{Binding Rows}">
+            <ListView.View>
+              <GridView>
+                <GridViewColumn x:DataType="local:Row" Header="Label" DisplayMemberBinding="{Binding Label}" Width="80" />
+                <GridViewColumn x:DataType="local:Row" Header="Done" DisplayMemberBinding="{Binding Done}" Width="50" />
+              </GridView>
+            </ListView.View>
+          </ListView>
+        </Grid>
+      </TabItem>
+      <TabItem Header="Tree">
+        <TreeView x:Name="Tree">
+          <TreeViewItem Header="root" IsExpanded="True">
+            <TreeViewItem Header="child 1" />
+            <TreeViewItem Header="child 2"><TreeViewItem Header="leaf" /></TreeViewItem>
+          </TreeViewItem>
+        </TreeView>
+      </TabItem>
+      <TabItem Header="Input">
+        <StackPanel>
+          <TextBox x:Name="Edit" Text="text" ToolTip="a tooltip" />
+          <PasswordBox />
+          <Expander Header="expander"><TextBlock Text="inside" /></Expander>
+          <GroupBox Header="group"><RadioButton Content="r" /></GroupBox>
+          <Calendar />
+          <ScrollViewer Height="40" VerticalScrollBarVisibility="Auto"><TextBlock Text="scroll" Height="200" /></ScrollViewer>
+        </StackPanel>
+      </TabItem>
+      <TabItem Header="Grid">
+        <DataGrid x:Name="Grid" ItemsSource="{Binding Rows}" AutoGenerateColumns="False" CanUserAddRows="False">
+          <DataGrid.Columns>
+            <DataGridTextColumn x:DataType="local:Row" Header="Label" Binding="{Binding Label}" />
+            <DataGridCheckBoxColumn x:DataType="local:Row" Header="Done" Binding="{Binding Done}" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</UserControl>

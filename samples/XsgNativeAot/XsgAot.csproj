@@ -17,6 +17,7 @@
     <AdditionalFiles Include="MainWindow.xaml" />
     <AdditionalFiles Include="App.xaml" />
     <AdditionalFiles Include="Card.xaml" />
+    <AdditionalFiles Include="Gallery.xaml" />
     <AdditionalFiles Include="Styles/Brushes.xaml" />
     <Resource Include="Assets/logo.png" />
     <ProjectReference Include="Theme/XsgAot.Theme.csproj" />

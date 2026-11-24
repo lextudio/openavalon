@@ -96,6 +96,46 @@ internal static class SelfCheck
         var bitmap = logo.Source as System.Windows.Media.Imaging.BitmapSource;
         Check("image resource", bitmap is { PixelWidth: 48, PixelHeight: 48 } && logo.ActualWidth == 48, $"source={bitmap?.GetType().Name} {bitmap?.PixelWidth}x{bitmap?.PixelHeight} element={logo.ActualWidth}x{logo.ActualHeight}");
 
+        // 7. A gallery of the rest of the controls an application uses (Menu, ToolBar, TabControl, TreeView, ListView, DataGrid, Calendar,
+        //    PasswordBox, Expander, ...), applied and laid out, with data templates over an ObservableCollection.
+        try
+        {
+            var gallery = new Gallery();
+            var host = new Window { Content = gallery, Width = 700, Height = 500 };
+            host.Show();
+            host.UpdateLayout();
+            int count = 0, missingTemplate = 0, columnHeaders = 0;
+            var dumpPath = Environment.GetEnvironmentVariable("XSGAOT_GALLERY");
+            var dump = dumpPath is null ? null : new System.Text.StringBuilder();
+            var depth = 0;
+            void Walk(DependencyObject node)
+            {
+                count++;
+                dump?.AppendLine(new string(' ', depth * 2) + node.GetType().Name + (node is FrameworkElement fe ? $" {fe.ActualWidth:0.#}x{fe.ActualHeight:0.#}" : ""));
+                depth++;
+                try { WalkChildren(node); } finally { depth--; }
+            }
+            void WalkChildren(DependencyObject node)
+            {
+                if (node is Control c && c.Template is null) missingTemplate++;
+                if (node is System.Windows.Controls.GridViewColumnHeader { Content: not null }) columnHeaders++;
+                for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++) Walk(System.Windows.Media.VisualTreeHelper.GetChild(node, i));
+            }
+            Walk(host);
+            if (dumpPath is not null) System.IO.File.WriteAllText(dumpPath, dump!.ToString());
+            var items = (ListBox)gallery.FindName("Items")!;
+            var tree = (TreeView)gallery.FindName("Tree")!;
+            var table = (ListView)gallery.FindName("Table")!;
+            var grid = (DataGrid)gallery.FindName("Grid")!;
+            Check("gallery", count > 200 && missingTemplate == 0 && columnHeaders == 2 && items.Items.Count == 3 && table.Items.Count == 3 && grid.Items.Count == 3 && tree.Items.Count == 1,
+                $"visuals={count} controlsWithoutTemplate={missingTemplate} columnHeaders={columnHeaders} listItems={items.Items.Count}[{string.Join(",", items.Items.Cast<object>().Select(o => (o as Row)?.Label ?? o?.GetType().Name))}] tableRows={table.Items.Count} gridRows={grid.Items.Count} treeRoots={tree.Items.Count}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("gallery", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }
