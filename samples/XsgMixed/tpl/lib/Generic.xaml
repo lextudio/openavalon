@@ -1,0 +1,13 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:l="clr-namespace:@NS@">
+  <Style TargetType="l:@P@Custom">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="l:@P@Custom">
+          <Border x:Name="PART_Border" Background="#ABCDEF"><TextBlock x:Name="PART_Text" Text="generic-@P@" /></Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>

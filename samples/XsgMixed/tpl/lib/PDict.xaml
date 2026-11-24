@@ -1,0 +1,34 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:l="clr-namespace:@NS@"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+  <SolidColorBrush x:Key="@P@Brush" Color="#112233" />
+  <sys:Double x:Key="@P@Number">42</sys:Double>
+  <sys:String x:Key="@P@Text">hello-@P@</sys:String>
+  <Style x:Key="@P@ButtonStyle" TargetType="Button">
+    <Setter Property="Background" Value="{StaticResource @P@Brush}" />
+    <Setter Property="Tag" Value="@P@" />
+  </Style>
+  <Style TargetType="l:@P@Custom">
+    <Setter Property="Tag" Value="implicit-@P@" />
+  </Style>
+  <DataTemplate DataType="{x:Type l:@P@Item}">
+    <TextBlock Text="{Binding Name}" Tag="template-@P@" />
+  </DataTemplate>
+  <SolidColorBrush x:Key="@P@Shared" x:Shared="False" Color="#010203" />
+  <sys:Int32 x:Key="@P@Int">7</sys:Int32>
+  <l:@P@Counted x:Key="@P@Counted" />
+  <Thickness x:Key="@P@Pad">1,2,3,4</Thickness>
+  <l:@P@Conv x:Key="@P@Conv" />
+  <SolidColorBrush x:Key="{ComponentResourceKey TypeInTargetAssembly={x:Type l:@P@Custom}, ResourceId=Rck}" Color="#0F0E0D" />
+  <ControlTemplate x:Key="@P@Template" TargetType="Button">
+    <Border x:Name="B" Background="{TemplateBinding Background}" Padding="{StaticResource @P@Pad}"><ContentPresenter /></Border>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value="0.5" /></Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+  <Style x:Key="@P@TemplatedStyle" TargetType="Button" BasedOn="{StaticResource @P@ButtonStyle}">
+    <Setter Property="Template" Value="{StaticResource @P@Template}" />
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Tag" Value="over" /></Trigger></Style.Triggers>
+  </Style>
+</ResourceDictionary>

@@ -1,0 +1,12 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceDictionary Source="/@NS@;component/@P@Dict.xaml" />
+    <ResourceDictionary Source="Sub/@P@Sub.xaml" />
+    <ResourceDictionary Source="/@OTHER@;component/@Q@Dict.xaml" />
+  </ResourceDictionary.MergedDictionaries>
+  <SolidColorBrush x:Key="@P@CrossBrush" Color="#445566" />
+  <Style x:Key="@P@CrossStyle" TargetType="Button" BasedOn="{StaticResource @Q@ButtonStyle}">
+    <Setter Property="Content" Value="{StaticResource @Q@Text}" />
+  </Style>
+</ResourceDictionary>

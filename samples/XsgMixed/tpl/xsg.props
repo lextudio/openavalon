@@ -1,0 +1,5 @@
+  <PropertyGroup>
+    <UseLibreWpfXamlSourceGenerator>true</UseLibreWpfXamlSourceGenerator>
+    <ProGpuWpfUseWpfMarkup>false</ProGpuWpfUseWpfMarkup>
+    <ImportFrameworkWinFXTargets>true</ImportFrameworkWinFXTargets>
+  </PropertyGroup>
