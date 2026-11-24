@@ -172,6 +172,28 @@ internal static class SelfCheck
             Check("dynamics", false, e.GetType().Name + ": " + e.Message);
         }
 
+        // 9. A custom control with its default style in Themes/Generic.xaml of the application (ThemeInfo SourceAssembly): found by the theme lookup
+        //    through the generated registry, not through BAML.
+        try
+        {
+            var badge = new Badge { Text = "new" };
+            var host = new Window { Content = badge, Width = 200, Height = 100 };
+            host.Show();
+            host.UpdateLayout();
+            var frame = badge.Template?.FindName("Frame", badge) as Border;
+            var label = badge.Template?.FindName("Label", badge) as TextBlock;
+            Check("generic theme", frame is not null && label?.Text == "new" && (frame.Background as System.Windows.Media.SolidColorBrush)?.Color == System.Windows.Media.Color.FromRgb(0x33, 0x66, 0xCC) && frame.CornerRadius.TopLeft == 8,
+                $"template={(badge.Template is null ? "none" : "applied")} text='{label?.Text}' background={frame?.Background} radius={frame?.CornerRadius.TopLeft}");
+            badge.IsEnabled = false;
+            host.UpdateLayout();
+            Check("generic theme trigger", (frame?.Background as System.Windows.Media.SolidColorBrush)?.Color == System.Windows.Media.Colors.Gray, $"disabled background={frame?.Background}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("generic theme", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }
