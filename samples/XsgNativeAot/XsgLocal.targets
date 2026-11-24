@@ -10,4 +10,6 @@
     <CompilerVisibleProperty Include="LibreWpfXsgExcludeTargetTypes" />
     <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="Link" />
   </ItemGroup>
+  <!-- The SDK that ships these is the next one; until then the sample imports them from the checkout. -->
+  <Import Project="$(MSBuildThisFileDirectory)../../LibreWPF/packaging/ProGPU.Wpf.Sdk/targets/ProGPU.Wpf.Sdk.XamlSourceGeneratorResources.targets" />
 </Project>

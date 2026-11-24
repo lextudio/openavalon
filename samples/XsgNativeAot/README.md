@@ -31,6 +31,7 @@ ok   template initializer: rows=2 height0=Auto
 ok   startup uri: MainWindow is MainWindow
 ok   merged dictionary: AccentBrush=#FF3366CC CardPadding=8,4,8,4
 ok   user control: title='a user control, styled from App.xaml resources' background=#FFEEF3FB
+ok   image resource: source=BitmapImage 48x48 element=48x48
 PASS
 ```
 
@@ -71,6 +72,8 @@ its own: the three things a real application has that a lone window does not. No
 | Document viewers cannot load | `System.Printing` is C++/CLI and Windows-only; its portable implementation has 1 of 56 public types. ILC replaces every method that needs `XpsDocumentWriter` (`DocumentViewerBase`, `FlowDocumentReader`, ...) with a throwing stub, including the theme's `InitializeComponent`. | Printing stays Windows-only: `LibreWpfXsgExcludeTargetTypes` (comma-separated: a `;` starts an .editorconfig comment) leaves the styles of `DocumentViewer`, `FlowDocument*`, `FixedDocument*` out of this theme. |
 | Templates need more than `SetValue` | `FrameworkElementFactory` sets dependency properties only. | Three additive hooks: `SetInitializer` (fill a collection / set an object property after creation), `SetAttacher` (`Track.Thumb`, named `RowDefinition`s: the item is a real, named, targetable template node), `SetCreator` (`new T()` instead of `Activator.CreateInstance`). The content property written as an element (`<Border.Child>`) becomes an ordinary factory child. |
 | `StartupUri`, `ResourceDictionary Source=`, `UserControl` | BAML resolves them at run time with `Application.LoadComponent` and pack URIs: no resource to read. | Each `x:Class` root object except the `Application` (a window, page or user control that can be created without arguments) is registered by resource path (`RegisterComponent`) and `LoadComponent(Uri)` asks that registry first; `Source` is resolved at build time to a registry lookup; `Uri` values are typed. |
+| `<Image Source>` and other `Resource` items | The XSG path does not import `Microsoft.WinFX.targets`, so a `Resource` item is not embedded: nothing to read through `pack://application`. | `ProGPU.Wpf.Sdk.XamlSourceGeneratorResources.targets` (imported by `XsgLocal.targets` until the next SDK) writes `<AssemblyName>.g.resources` and embeds it; `ImageSource` text becomes `new BitmapImage(new Uri(...))`. |
+| Binding paths `(Owner.Member)`, `(prefix:Owner.Member)` | The run-time path parser knows no prefix and resolves by reflection: `(base:AccessibilitySwitches.X)` throws and the binding silently does not apply. | Resolved at build time (a `DependencyProperty`, or a static `PropertyInfo`). Nine paths name `internal` types only the in-box theme assemblies can see: reported as `LWXSG0008`, and their `TypeNameParserException` is the two first-chance exceptions that remain. |
 | A DataTrigger's `Value="True"` | `DefaultValueConverter.GetConverter` goes through the BAML known-type table, which `Activator`-creates `BooleanConverter`. | Under NativeAOT only (`RuntimeFeature.IsDynamicCodeSupported` is false) it uses `TypeDescriptor`'s intrinsic converters first. |
 | `StaticResource` of a key defined in a local `.Resources` | The key exists on the instance / style, not in the theme dictionary. | Looked up when applied (`SetResourceReference`, `DynamicResourceExtension`); `Style.Resources` / `ControlTemplate.Resources` / `Grid.Resources` are generated, and the generated dictionary keeps a scope stack for what is being built. |
 
@@ -88,7 +91,7 @@ its own: the three things a real application has that a lone window does not. No
   (`GlyphRun..ctor(TtfFont, ...)`, `GlyphRun.FontSize` / `GlyphIndices`, `DrawingContext..ctor(ProGPU.Scene.DrawingContext)`,
   `DashStyle..ctor(double[], double)`, `FontFamily.NativeFont`, `BitmapSource.GpuTexture`). Checked: this window draws all its text, borders,
   gradients and controls identically to the JIT build (the pixel comparison above), so none of them is on the path these controls take, including
-  `ProGpuCompositionCommandSink.DrawGlyphRun`. Not exercised by this window: images (`BitmapSource.GpuTexture`), dashed pens (`DashStyle`),
+  `ProGpuCompositionCommandSink.DrawGlyphRun`. The window's `<Image>` (a decoded PNG from `.g.resources`) is drawn and is part of the identical pixels, so `BitmapSource.GpuTexture` is not on the path an `Image` takes either. Not exercised by this window: dashed pens (`DashStyle`),
   drawing contexts created from ProGPU scenes, `FontFamily.NativeFont`; they stay open until something draws them.
 - ILC still reports trim/AOT analysis warnings (`IL3053`) for WindowsBase, PresentationCore, PresentationFramework, System.Xaml;
   paths this app does not use (XAML/BAML loading, `TextRange` serialization, …) were not exercised.

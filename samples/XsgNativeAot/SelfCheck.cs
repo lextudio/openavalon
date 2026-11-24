@@ -91,6 +91,11 @@ internal static class SelfCheck
         Check("user control", card.Title.StartsWith("a user control") && cardBorder?.Background is System.Windows.Media.SolidColorBrush { Color: { R: 0xEE, G: 0xF3, B: 0xFB } },
             $"title='{card.Title}' background={cardBorder?.Background}");
 
+        // 6. A pack resource: <Image Source="Assets/logo.png"/> reads the image from the assembly's .g.resources, written by the XSG resource target.
+        var logo = (Image)window.FindName("Logo")!;
+        var bitmap = logo.Source as System.Windows.Media.Imaging.BitmapSource;
+        Check("image resource", bitmap is { PixelWidth: 48, PixelHeight: 48 } && logo.ActualWidth == 48, $"source={bitmap?.GetType().Name} {bitmap?.PixelWidth}x{bitmap?.PixelHeight} element={logo.ActualWidth}x{logo.ActualHeight}");
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }

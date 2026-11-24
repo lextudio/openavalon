@@ -9,6 +9,7 @@
     <TextBlock x:Name="Status" Text="hello from XSG" FontSize="24" Foreground="Black" />
     <TextBlock x:Name="Greeting" Text="{Binding Person.Greeting}" />
     <TextBox x:Name="NameBox" Text="{Binding Person.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+    <Image x:Name="Logo" Source="Assets/logo.png" Width="48" Height="48" HorizontalAlignment="Left" />
     <local:Card x:Name="TheCard" Title="a user control, styled from App.xaml resources" />
     <Button x:Name="Action" Content="A button" />
     <CheckBox Content="a check box" IsChecked="True" />
