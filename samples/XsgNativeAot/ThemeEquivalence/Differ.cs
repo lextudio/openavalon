@@ -31,7 +31,9 @@ internal sealed class Differ
     private static object? ResourceKeyOf(Expression e) =>
         e.GetType().GetProperty("ResourceKey", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.GetValue(e);
     public int KeysCompared;
+    public int BamlKeys;
     public readonly List<string> Excluded = new();
+    public readonly List<string> Failed = new();   // templates that could not be instantiated on either side
     // Type names whose resources the XSG theme leaves out on purpose (LibreWpfXsgExcludeTargetTypes: printing is Windows-only).
     public HashSet<string> ExcludedTypes { get; init; } = new();
 
@@ -41,6 +43,7 @@ internal sealed class Differ
     {
         _xsgRoot ??= xsg;
         var bamlKeys = KeyMap(baml);
+        if (ReferenceEquals(_xsgRoot, xsg) && BamlKeys == 0) BamlKeys = bamlKeys.Count;
         var xsgKeys = KeyMap(xsg);
         foreach (var key in bamlKeys.Keys.Except(xsgKeys.Keys).OrderBy(k => k))
         {
@@ -277,8 +280,13 @@ internal sealed class Differ
         else if ((a.Resources is null) != (b.Resources is null)) Diff(path + ".Resources", $"{Show(a.Resources)} vs {Show(b.Resources)}");
         Seal(path + " (BAML)", a);
         Seal(path + " (XSG)", b);
-        try { ra = a.LoadContent(); } catch (Exception e) { Diff(path + ".Content", "BAML LoadContent failed: " + e.GetType().Name + ": " + e.Message); }
-        try { rb = b.LoadContent(); } catch (Exception e) { Diff(path + ".Content", "XSG LoadContent failed: " + e.GetType().Name + ": " + e.Message); }
+        string? failureA = null, failureB = null;
+        try { ra = a.LoadContent(); } catch (Exception e) { failureA = e.GetType().Name + ": " + e.Message; }
+        try { rb = b.LoadContent(); } catch (Exception e) { failureB = e.GetType().Name + ": " + e.Message; }
+        // A template that cannot be instantiated outside a control (AdornedElementPlaceholder: "only as part of a Template") fails on both sides: nothing to compare.
+        if (failureA is not null && failureB is not null) { Failed.Add(path); return; }
+        if (failureA is not null) Diff(path + ".Content", "BAML LoadContent failed: " + failureA);
+        if (failureB is not null) Diff(path + ".Content", "XSG LoadContent failed: " + failureB);
         if (ra is not null && rb is not null) CompareTree(path + ".Content", ra, rb, depth);
     }
 

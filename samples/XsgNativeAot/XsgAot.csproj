@@ -26,7 +26,10 @@
     <AdditionalFiles Include="Themes/Generic.xaml" />
     <AdditionalFiles Include="Styles/Brushes.xaml" />
     <Resource Include="Assets/logo.png" />
-    <ProjectReference Include="Theme/XsgAot.Theme.csproj" />
+    <!-- The theme: this sample's own XSG theme project, or (property UseInBoxXsgTheme=true) the in-box PresentationFramework.Aero2 that LibreWPF built with LibreWpfXsgThemes=true,
+         patched into the private packages by prepare.sh with its inbox-xsg-aero2 option (two dashes in front). -->
+    <ProjectReference Include="Theme/XsgAot.Theme.csproj" Condition="'$(UseInBoxXsgTheme)' != 'true'" />
+    <TrimmerRootAssembly Include="PresentationFramework.Aero2" Condition="'$(UseInBoxXsgTheme)' == 'true'" />
   </ItemGroup>
   <Import Project="XsgLocal.targets" />
 </Project>

@@ -2,21 +2,20 @@ using System.Windows;
 using System.Windows.Markup;
 using ThemeEquivalence;
 
-// Compares the in-box BAML Aero2 dictionary with the one compiled by the XAML source generator.
-// Usage: ThemeEquivalence [limit]   (prints at most `limit` differences, default 60; exit code 1 when there are any)
+// Compares an in-box BAML theme dictionary with the one compiled by the XAML source generator.
+//   ThemeEquivalence [limit] [--theme=Aero2] [--files=aero2.normalcolor] [path/to/PresentationFramework.<Theme>.dll]
+// Without a dll path the sample's own Theme project (Aero2) is the XSG side; with one, that assembly (built with -p:LibreWpfXsgThemes=true in LibreWPF's own
+// build) is loaded in its own load context. Prints at most `limit` unexplained differences; exit code 1 when there is one, when too few keys were compared,
+// or when a documented known difference does not occur as often as documented.
 [STAThread]
 static int Run(string[] args)
 {
-    var limit = args.Length > 0 && int.TryParse(args[0], out var n) ? n : 60;
+    var limit = args.Select(x => int.TryParse(x, out var n) ? (int?)n : null).FirstOrDefault(x => x is not null) ?? 60;
+    var theme = args.FirstOrDefault(a => a.StartsWith("--theme=", StringComparison.Ordinal))?["--theme=".Length..] ?? "Aero2";
+    var files = (args.FirstOrDefault(a => a.StartsWith("--files=", StringComparison.Ordinal))?["--files=".Length..]
+        ?? theme switch { "Classic" => "classic", "Fluent" => "fluent", _ => theme.ToLowerInvariant() + ".normalcolor" }).Split(',');
+    var assemblyName = "PresentationFramework." + theme;
     _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-
-    // The generated dictionary: registered under Aero2's name by the theme assembly's module initializer (touch its assembly first).
-    System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(XsgAot.Theme.Marker).Module.ModuleHandle);
-    if (!XamlSourceGeneratedResources.TryCreateDictionary("PresentationFramework.Aero2", "themes/aero2.normalcolor.xaml", out var xsg))
-    {
-        Console.WriteLine("The generated Aero2 dictionary is not registered.");
-        return 2;
-    }
 
     if (args.Contains("--menu-role"))
     {
@@ -49,34 +48,78 @@ static int Run(string[] args)
         return 0;
     }
 
-    var baml = new ResourceDictionary { Source = new Uri("pack://application:,,,/PresentationFramework.Aero2;component/themes/aero2.normalcolor.xaml") };
-    var differ = new Differ { ExcludedTypes = new HashSet<string> { "DocumentViewer", "FlowDocumentReader", "FlowDocumentScrollViewer", "FlowDocumentPageViewer", "FlowDocument", "FixedDocument", "FixedDocumentSequence" } };
-    differ.CompareDictionaries(baml, xsg);
-    // Differences that are understood and accepted (each with its cause); anything else fails the run.
+    if (args.FirstOrDefault(x => x.StartsWith("--probe-key=", StringComparison.Ordinal)) is { } probe)
+    {
+        var key = probe["--probe-key=".Length..];
+        foreach (var file in files)
+        {
+            var dictionary = new ResourceDictionary { Source = new Uri($"pack://application:,,,/{assemblyName};component/themes/{file}.xaml") };
+            object? value = null;
+            string how;
+            try { value = dictionary[key]; how = "ok"; } catch (Exception e) { how = e.GetType().Name + ": " + e.Message; }
+            Console.WriteLine($"{file}: [{key}] -> {value?.GetType().Name} {value} ({how}); merged={dictionary.MergedDictionaries.Count}");
+        }
+        return 0;
+    }
+
+    // The BAML dictionaries first: once a second assembly of the same name is loaded the name no longer resolves to the packaged one.
+    var bamls = files.ToDictionary(f => f, f => new ResourceDictionary { Source = new Uri($"pack://application:,,,/{assemblyName};component/themes/{f}.xaml") });
+
+    var xsgAssemblyPath = args.FirstOrDefault(a => a.EndsWith(".dll", StringComparison.OrdinalIgnoreCase));
+    if (xsgAssemblyPath is not null)
+    {
+        var context = new System.Runtime.Loader.AssemblyLoadContext("xsg-" + theme);
+        var assembly = context.LoadFromAssemblyPath(System.IO.Path.GetFullPath(xsgAssemblyPath));
+        Console.WriteLine("XSG side: " + assembly.Location + " (" + new System.IO.FileInfo(assembly.Location).Length + " bytes)");
+        System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(assembly.ManifestModule.ModuleHandle);
+    }
+    else
+    {
+        System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(XsgAot.Theme.Marker).Module.ModuleHandle);
+    }
+
+    // Differences that are understood and accepted, per theme (each with its cause); anything else fails the run.
     var known = new (string Pattern, int Count, string Why)[]
     {
-        (@"/Menu\[\d+\]/MenuItem\[\d+\]\.MenuItem\.Role: MenuItemRole TopLevelItem vs MenuItemRole SubmenuItem$", 4,
+        (@"/Menu\[\d+\]/MenuItem\[\d+\]\.MenuItem\.Role: MenuItemRole TopLevelItem vs MenuItemRole SubmenuItem$", theme == "Fluent" ? 6 : 4,
             "A MenuItem created as a FrameworkElementFactory node has no LogicalParent (UpdateRole needs 'LogicalParent is Menu'); BAML creates plain objects. Stock WPF behaviour of FEF templates; only the NavigationWindow chrome menu is affected."),
     };
-    var unknown = differ.Diffs.Where(d => !known.Any(k => System.Text.RegularExpressions.Regex.IsMatch(d, k.Pattern))).ToList();
-    // The run must have compared something, and a known difference must occur exactly as often as documented (a new one at another place is news).
-    var problems = new List<string>();
-    if (differ.KeysCompared < 300) problems.Add($"only {differ.KeysCompared} keys were compared (expected about 375)");
-    foreach (var (pattern, expected, _) in known)
+
+    var total = 0;
+    var failed = false;
+    foreach (var file in files)
     {
-        var seen = differ.Diffs.Count(d => System.Text.RegularExpressions.Regex.IsMatch(d, pattern));
-        if (seen != expected) problems.Add($"known difference {pattern} occurs {seen} times, documented {expected}");
+        if (!XamlSourceGeneratedResources.TryCreateDictionary(assemblyName, $"themes/{file}.xaml", out var xsg))
+        {
+            Console.WriteLine($"The generated {assemblyName} themes/{file}.xaml is not registered.");
+            return 2;
+        }
+
+        var differ = new Differ { ExcludedTypes = new HashSet<string> { "DocumentViewer", "FlowDocumentReader", "FlowDocumentScrollViewer", "FlowDocumentPageViewer", "FlowDocument", "FixedDocument", "FixedDocumentSequence" } };
+        differ.CompareDictionaries(bamls[file], xsg);
+        var unknown = differ.Diffs.Where(d => !known.Any(k => System.Text.RegularExpressions.Regex.IsMatch(d, k.Pattern))).ToList();
+        var problems = new List<string>();
+        if (differ.KeysCompared < 0.9 * differ.BamlKeys || differ.KeysCompared == 0) problems.Add($"only {differ.KeysCompared} of {differ.BamlKeys} keys were compared");
+        foreach (var (pattern, expected, _) in known)
+        {
+            var seen = differ.Diffs.Count(d => System.Text.RegularExpressions.Regex.IsMatch(d, pattern));
+            if (seen != expected) problems.Add($"known difference {pattern} occurs {seen} times, documented {expected}");
+        }
+
+        Console.WriteLine($"== {assemblyName} {file}: {differ.KeysCompared} of {differ.BamlKeys} keys compared, {differ.Diffs.Count} differences ({unknown.Count} unexplained), {differ.Excluded.Count} left out on purpose, {differ.Failed.Count} not instantiable on either side");
+        foreach (var diff in unknown.Take(limit)) Console.WriteLine(diff);
+        foreach (var problem in problems) Console.WriteLine("PROBLEM: " + problem);
+        foreach (var (pattern, _, why) in known)
+        {
+            var count = differ.Diffs.Count(d => System.Text.RegularExpressions.Regex.IsMatch(d, pattern));
+            if (count > 0) Console.WriteLine($"known difference x{count}: {why}");
+        }
+        total += unknown.Count;
+        failed |= unknown.Count > 0 || problems.Count > 0;
     }
-    foreach (var problem in problems) Console.WriteLine("PROBLEM: " + problem);
-    foreach (var diff in unknown.Take(limit)) Console.WriteLine(diff);
-    foreach (var (pattern, _, why) in known)
-    {
-        var count = differ.Diffs.Count(d => System.Text.RegularExpressions.Regex.IsMatch(d, pattern));
-        if (count > 0) Console.WriteLine($"known difference x{count}: {why}");
-    }
-    Console.WriteLine($"left out on purpose (LibreWpfXsgExcludeTargetTypes): {differ.Excluded.Count}");
-    Console.WriteLine($"keys compared: {differ.KeysCompared}, differences: {differ.Diffs.Count} ({unknown.Count} unexplained)");
-    return unknown.Count == 0 && problems.Count == 0 ? 0 : 1;
+
+    Console.WriteLine(failed ? "NOT EQUIVALENT" : "EQUIVALENT (known differences only)");
+    return failed ? 1 : 0;
 }
 
 return Run(args);

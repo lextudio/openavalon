@@ -114,6 +114,13 @@ The cause: a `MenuItem` built as a `FrameworkElementFactory` node has no `Logica
 FEF templates, reproduced with a hand-written factory; `--menu-role` prints it). Only the `NavigationWindow` chrome menu is affected. Not compared deeply: the contents of
 `Storyboard`s in trigger actions (their counts are compared) and the behaviour of the templates once applied (the self-checks cover that for the controls they use).
 
+### All the in-box themes
+
+`dotnet run -c Release -- --theme=<Name> --files=<xaml,...> <path to PresentationFramework.<Name>.dll built with -p:LibreWpfXsgThemes=true>` compares any in-box theme (LibreWPF's own build
+compiles them all, see `Documentation/XamlSourceGeneratorUsage.md` "The in-box themes"). Measured (macOS arm64): Aero2, Aero, AeroLite, Classic, Royale, Luna (3 files) and Fluent
+(4 files) are **equivalent** to their BAML dictionaries, with only the `MenuItem.Role` difference above (Fluent: 6 menu items, the others 4).
+With `prepare.sh --inbox-xsg-aero2` and `-p:UseInBoxXsgTheme=true` the sample app itself runs on the in-box Aero2 built this way, not on its own `Theme/` project: 20 of 20 checks in JIT and in NativeAOT.
+
 ## Prototype shortcuts (what is not product yet)
 
 - `prepare.sh` patches `PresentationFramework` (ref + lib) and `ProGPU.Wpf` from a local LibreWPF build into this sample's private
