@@ -136,6 +136,42 @@ internal static class SelfCheck
             Check("gallery", false, e.GetType().Name + ": " + e.Message);
         }
 
+        // 8. Styles with triggers, converters and a MultiBinding, a command, a state-managed template, a ToolTip, an ItemsControl with its own panel.
+        try
+        {
+            var dynamics = new Dynamics();
+            var host = new Window { Content = dynamics, Width = 400, Height = 400 };
+            host.Show();
+            host.UpdateLayout();
+            var model = (DynamicsModel)dynamics.DataContext;
+            var upper = (TextBlock)dynamics.FindName("Upper")!;
+            var joined = (TextBlock)dynamics.FindName("Joined")!;
+            var pulse = (Border)dynamics.FindName("PulseBorder")!;
+            var before = (pulse.Background as System.Windows.Media.SolidColorBrush)?.Color;
+            var stateButton = (Button)dynamics.FindName("StateBtn")!;
+            var edit = (TextBox)dynamics.FindName("Edit")!;
+            var repeater = (ItemsControl)dynamics.FindName("Repeater")!;
+            var firstState = joined.Text;
+            var firstUpper = upper.Text;
+            stateButton.Command.Execute(null);                                   // Count 0 -> 1, On = true
+            host.UpdateLayout();
+            var after = (pulse.Background as System.Windows.Media.SolidColorBrush)?.Color;
+            var afterBump = joined.Text;
+            var stateRoot = (Border)stateButton.Template.FindName("Root", stateButton);
+            var stateWorked = VisualStateManager.GoToState(stateButton, "MouseOver", false);
+            edit.Text = "grace";
+            var tip = ((TextBlock)dynamics.FindName("ToolTipHost")!).ToolTip;
+            Check("dynamics", firstUpper == "ADA" && firstState == "ada/0" && afterBump == "ada/1"
+                    && before == System.Windows.Media.Colors.LightGray && after == System.Windows.Media.Colors.Gold
+                    && model.Name == "grace" && tip is "grace" && stateWorked && repeater.Items.Count == 3 && stateRoot is not null,
+                $"upper='{firstUpper}' joined='{firstState}'->'{afterBump}' background={before}->{after} name='{model.Name}' tip='{tip}' items={repeater.Items.Count} stateManager={stateWorked}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("dynamics", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }

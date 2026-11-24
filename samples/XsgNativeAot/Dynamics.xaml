@@ -1,0 +1,73 @@
+<UserControl x:Class="XsgAot.Dynamics"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:XsgAot"
+             x:DataType="local:DynamicsModel">
+  <UserControl.Resources>
+    <local:UpperConverter x:Key="Upper" />
+    <local:JoinConverter x:Key="Join" />
+    <Style x:Key="Pulse" TargetType="Border">
+      <Setter Property="Background" Value="LightGray" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding On}" Value="True">
+          <Setter Property="Background" Value="Gold" />
+        </DataTrigger>
+        <MultiTrigger>
+          <MultiTrigger.Conditions>
+            <Condition Property="IsMouseOver" Value="True" />
+            <Condition Property="Tag" Value="x" />
+          </MultiTrigger.Conditions>
+          <Setter Property="BorderBrush" Value="Red" />
+        </MultiTrigger>
+        <EventTrigger RoutedEvent="Border.Loaded">
+          <BeginStoryboard>
+            <Storyboard>
+              <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.2" To="1" Duration="0:0:0.01" />
+            </Storyboard>
+          </BeginStoryboard>
+        </EventTrigger>
+      </Style.Triggers>
+    </Style>
+    <ControlTemplate x:Key="StateButton" TargetType="Button">
+      <Border x:Name="Root" Background="{TemplateBinding Background}">
+        <VisualStateManager.VisualStateGroups>
+          <VisualStateGroup x:Name="CommonStates">
+            <VisualState x:Name="Normal" />
+            <VisualState x:Name="MouseOver">
+              <Storyboard><ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="Red" Duration="0" /></Storyboard>
+            </VisualState>
+          </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <ContentPresenter HorizontalAlignment="Center" />
+      </Border>
+    </ControlTemplate>
+  </UserControl.Resources>
+  <StackPanel>
+    <Border x:Name="PulseBorder" Style="{StaticResource Pulse}" Height="20" Tag="x">
+      <TextBlock x:Name="Upper" Text="{Binding Name, Converter={StaticResource Upper}}" />
+    </Border>
+    <TextBlock x:Name="Joined">
+      <TextBlock.Text>
+        <MultiBinding Converter="{StaticResource Join}">
+          <Binding Path="Name" />
+          <Binding Path="Count" />
+        </MultiBinding>
+      </TextBlock.Text>
+    </TextBlock>
+    <Button x:Name="StateBtn" Template="{StaticResource StateButton}" Content="state" Background="Gray" Command="{Binding Bump}" />
+    <TextBlock x:Name="ToolTipHost" Text="hover" ToolTip="{Binding Name}" />
+    <TextBox x:Name="Edit" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}">
+      <TextBox.ContextMenu>
+        <ContextMenu><MenuItem Header="Copy" Command="ApplicationCommands.Copy" /></ContextMenu>
+      </TextBox.ContextMenu>
+    </TextBox>
+    <ItemsControl x:Name="Repeater" ItemsSource="{Binding Names}">
+      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="x:String">
+          <TextBlock Text="{Binding}" Margin="2" />
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </StackPanel>
+</UserControl>
