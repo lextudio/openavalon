@@ -19,6 +19,7 @@
     <AdditionalFiles Include="Card.xaml" />
     <AdditionalFiles Include="Gallery.xaml" />
     <AdditionalFiles Include="Dynamics.xaml" />
+    <AdditionalFiles Include="Page1.xaml" />
     <AdditionalFiles Include="Themes/Generic.xaml" />
     <AdditionalFiles Include="Styles/Brushes.xaml" />
     <Resource Include="Assets/logo.png" />

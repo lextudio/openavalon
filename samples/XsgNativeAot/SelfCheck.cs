@@ -194,6 +194,23 @@ internal static class SelfCheck
             Check("generic theme", false, e.GetType().Name + ": " + e.Message);
         }
 
+        // 10. Frame navigation by URI: Frame.Source="Page1.xaml" is resolved through the same component registry as StartupUri.
+        try
+        {
+            var frame = new Frame { Source = new Uri("Page1.xaml", UriKind.Relative) };
+            var host = new Window { Content = frame, Width = 300, Height = 200 };
+            host.Show();
+            host.UpdateLayout();
+            var page = frame.Content as Page;
+            var body = (page?.FindName("Body") as TextBlock)?.Text;
+            Check("frame navigation", page is not null && page.GetType().Name == "Page1" && page.Title == "page one" && body == "page body", $"content={frame.Content?.GetType().Name} title='{(page as Page)?.Title}' body='{body}'");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("frame navigation", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }
