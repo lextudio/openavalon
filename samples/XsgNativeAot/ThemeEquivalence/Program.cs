@@ -3,7 +3,8 @@ using System.Windows.Markup;
 using ThemeEquivalence;
 
 // Compares an in-box BAML theme dictionary with the one compiled by the XAML source generator.
-//   ThemeEquivalence [limit] [--theme=Aero2] [--files=aero2.normalcolor] [path/to/PresentationFramework.<Theme>.dll]
+//   ThemeEquivalence [limit] [--theme=Aero2] [--files=aero2.normalcolor] [--time] [--probe-key=<key>] [path/to/PresentationFramework.<Theme>.dll]
+//   (--time needs the dll path: it prints the first and later load time of the BAML and the generated dictionary)
 // Without a dll path the sample's own Theme project (Aero2) is the XSG side; with one, that assembly (built with -p:LibreWpfXsgThemes=true in LibreWPF's own
 // build) is loaded in its own load context. Prints at most `limit` unexplained differences; exit code 1 when there is one, when too few keys were compared,
 // or when a documented known difference does not occur as often as documented.
@@ -59,6 +60,36 @@ static int Run(string[] args)
             try { value = dictionary[key]; how = "ok"; } catch (Exception e) { how = e.GetType().Name + ": " + e.Message; }
             Console.WriteLine($"{file}: [{key}] -> {value?.GetType().Name} {value} ({how}); merged={dictionary.MergedDictionaries.Count}");
         }
+        return 0;
+    }
+
+    if (args.Contains("--time"))
+    {
+        // How long building the whole dictionary takes: BAML (a ResourceDictionary with Source, its templates are parsed lazily) vs the generated one (everything is built at once).
+        var file = files[0];
+        var uri = new Uri($"pack://application:,,,/{assemblyName};component/themes/{file}.xaml");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var cold = new ResourceDictionary { Source = uri };
+        var bamlCold = sw.Elapsed.TotalMilliseconds;
+        var bamlWarm = Enumerable.Range(0, 5).Select(i => { var t = System.Diagnostics.Stopwatch.StartNew(); var d = new ResourceDictionary { Source = uri }; return t.Elapsed.TotalMilliseconds; }).Average();
+        var xsgPath = args.FirstOrDefault(a => a.EndsWith(".dll", StringComparison.OrdinalIgnoreCase));
+        if (xsgPath is null)
+        {
+            Console.WriteLine("--time needs the path of the XSG-compiled PresentationFramework.<Theme>.dll.");
+            return 2;
+        }
+        var ctx = new System.Runtime.Loader.AssemblyLoadContext("xsg-time");
+        var asm = ctx.LoadFromAssemblyPath(System.IO.Path.GetFullPath(xsgPath));
+        System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(asm.ManifestModule.ModuleHandle);
+        sw.Restart();
+        if (!XamlSourceGeneratedResources.TryCreateDictionary(assemblyName, $"themes/{file}.xaml", out ResourceDictionary? first))
+        {
+            Console.WriteLine($"The generated {assemblyName} themes/{file}.xaml is not registered.");
+            return 2;
+        }
+        var xsgCold = sw.Elapsed.TotalMilliseconds;
+        var xsgWarm = Enumerable.Range(0, 5).Select(i => { var t = System.Diagnostics.Stopwatch.StartNew(); XamlSourceGeneratedResources.TryCreateDictionary(assemblyName, $"themes/{file}.xaml", out ResourceDictionary? next); return t.Elapsed.TotalMilliseconds; }).Average();
+        Console.WriteLine($"{assemblyName} {file}: BAML first {bamlCold:F0} ms, then {bamlWarm:F0} ms; XSG first {xsgCold:F0} ms, then {xsgWarm:F0} ms");
         return 0;
     }
 

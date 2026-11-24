@@ -31,5 +31,16 @@
     <ProjectReference Include="Theme/XsgAot.Theme.csproj" Condition="'$(UseInBoxXsgTheme)' != 'true'" />
     <TrimmerRootAssembly Include="PresentationFramework.Aero2" Condition="'$(UseInBoxXsgTheme)' == 'true'" />
   </ItemGroup>
+  <!-- Opt in (-p:UseDevFlow=true): the LibreWPF DevFlow agent (automation, UI tree, screenshots over HTTP) with XSGAOT_DEVFLOW=<port> at run time. The package comes from
+       GitHub Packages; download it to a folder and add that folder with -p:RestoreAdditionalProjectSources=<folder>. -->
+  <PropertyGroup Condition="'$(UseDevFlow)' == 'true'">
+    <DefineConstants>$(DefineConstants);XSGAOT_DEVFLOW</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(UseDevFlow)' == 'true'">
+    <PackageReference Include="LeXtudio.DevFlow.Agent.LibreWpf" Version="$(DevFlowVersion)" />
+  </ItemGroup>
+  <PropertyGroup>
+    <DevFlowVersion Condition="'$(DevFlowVersion)' == ''">0.3.2-preview.13</DevFlowVersion>
+  </PropertyGroup>
   <Import Project="XsgLocal.targets" />
 </Project>

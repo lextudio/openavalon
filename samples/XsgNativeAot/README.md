@@ -56,12 +56,9 @@ apphost: SDK 15.5, classic grey bar with a centred title; the NativeAOT executab
 which is also the 4 pt (612 vs 608) of client height in the visual-tree diff above. Screenshots need an unlocked screen (a locked session is not composited and every capture is blank: `compare-pixels.sh` refuses to run then)
 and are taken by the app itself
 (`MacWindowCapture`, `XSGAOT_CAPTURE=<png>` with `check`): a process may capture its own windows without the Screen Recording permission;
-`screencapture`, another process, and DevFlow's `/api/v1/ui/screenshot` (it goes through `RenderTargetBitmap`, which needs the Windows-only
-`wpfgfx_cor3`) cannot.
-
-DevFlow (`LeXtudio.DevFlow.Agent.LibreWpf` 0.3.1, tried here by adding the package and `AddWpfDevFlowAgent`; not kept in the sample): under JIT its
-status, actions and tree work. Under NativeAOT its HTTP server starts but every request fails with "Reflection-based serialization has been disabled" (`System.Text.Json` without a
-source-generated context): the agent itself is not NativeAOT-compatible yet.
+`screencapture` and another process cannot. DevFlow's `/api/v1/ui/screenshot` could not with `LeXtudio.DevFlow.Agent.LibreWpf` 0.3.1 (it went through `RenderTargetBitmap`, which needs the
+Windows-only `wpfgfx_cor3`), and under NativeAOT every 0.3.1 request failed with "Reflection-based serialization has been disabled"; the prerelease 0.3.2-preview.13 does capture the window and
+serves the tree under NativeAOT: see "DevFlow under NativeAOT (opt-in)" below for what works with it and what does not.
 
 The window is created by `App.xaml`'s `StartupUri`, `App.xaml` merges `Styles/Brushes.xaml` with `Source=`, and `Card.xaml` is a `UserControl` of
 its own: the three things a real application has that a lone window does not. None of them can be loaded from a resource under NativeAOT; see
@@ -120,6 +117,14 @@ FEF templates, reproduced with a hand-written factory; `--menu-role` prints it).
 compiles them all, see `Documentation/XamlSourceGeneratorUsage.md` "The in-box themes"). Measured (macOS arm64): Aero2, Aero, AeroLite, Classic, Royale, Luna (3 files) and Fluent
 (4 files) are **equivalent** to their BAML dictionaries, with only the `MenuItem.Role` difference above (Fluent: 6 menu items, the others 4).
 With `prepare.sh --inbox-xsg-aero2` and `-p:UseInBoxXsgTheme=true` the sample app itself runs on the in-box Aero2 built this way, not on its own `Theme/` project: 20 of 20 checks in JIT and in NativeAOT.
+
+## DevFlow under NativeAOT (opt-in)
+
+`-p:UseDevFlow=true` adds the LibreWPF DevFlow agent (`LeXtudio.DevFlow.Agent.LibreWpf`, `DevFlowVersion` default `0.3.2-preview.13`, from GitHub Packages: download the nupkgs of it and of
+`LeXtudio.DevFlow.Agent.Core` into a folder and add that folder as a package source with a mapping for `LeXtudio.DevFlow.*`) and `XSGAOT_DEVFLOW=<port>` starts it. Measured on macOS arm64 with
+that prerelease, JIT and NativeAOT alike: `GET /api/v1/ui/tree` returns the visual tree and **`GET /api/v1/ui/screenshot` returns a real PNG of the window** (the NativeAOT window above,
+themed, not blank). One endpoint still fails under NativeAOT: `GET /api/v1/agent/status` answers `JsonTypeInfo metadata for type '<>f__AnonymousType...[Boolean x11]' was not provided`:
+the status payload is an anonymous type that the agent's source-generated JSON context does not list (an agent-side gap, not LibreWPF's).
 
 ## Prototype shortcuts (what is not product yet)
 

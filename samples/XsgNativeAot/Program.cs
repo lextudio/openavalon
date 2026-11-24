@@ -26,6 +26,13 @@ public static class Program
         }
 
         var app = new App();
+#if XSGAOT_DEVFLOW
+        if (int.TryParse(Environment.GetEnvironmentVariable("XSGAOT_DEVFLOW"), out var devFlowPort))
+        {
+            LeXtudio.DevFlow.Agent.Wpf.WpfAgentServiceExtensions.AddWpfDevFlowAgent(app, new Microsoft.Maui.DevFlow.Agent.Core.AgentOptions { Port = devFlowPort });
+            Console.WriteLine("devflow=" + devFlowPort);
+        }
+#endif
         if (args.Contains("check"))
         {
             // The window is created by App.xaml's StartupUri during Run: hook it as soon as the dispatcher is running.
