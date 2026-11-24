@@ -10,7 +10,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <PublishAot>true</PublishAot>
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
-    <_SuppressWpfTrimError>true</_SuppressWpfTrimError>
     <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup>
@@ -21,8 +20,6 @@
     <AdditionalFiles Include="Styles/Brushes.xaml" />
     <Resource Include="Assets/logo.png" />
     <ProjectReference Include="Theme/XsgAot.Theme.csproj" />
-    <!-- NativeAOT runs the module initializer (the theme registration) only of an assembly that is part of the graph. -->
-    <TrimmerRootAssembly Include="XsgAot.Theme" />
   </ItemGroup>
   <Import Project="XsgLocal.targets" />
 </Project>

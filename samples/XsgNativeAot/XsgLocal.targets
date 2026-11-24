@@ -12,4 +12,5 @@
   </ItemGroup>
   <!-- The SDK that ships these is the next one; until then the sample imports them from the checkout. -->
   <Import Project="$(MSBuildThisFileDirectory)../../LibreWPF/packaging/ProGPU.Wpf.Sdk/targets/ProGPU.Wpf.Sdk.XamlSourceGeneratorResources.targets" />
+  <Import Project="$(MSBuildThisFileDirectory)../../LibreWPF/packaging/ProGPU.Wpf.Sdk/targets/ProGPU.Wpf.Sdk.XamlSourceGeneratorNativeAot.targets" />
 </Project>
