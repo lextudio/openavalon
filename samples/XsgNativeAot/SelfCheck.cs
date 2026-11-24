@@ -211,6 +211,41 @@ internal static class SelfCheck
             Check("frame navigation", false, e.GetType().Name + ": " + e.Message);
         }
 
+        // 11. Event handlers named in XAML, x:Static, an implicit DataTemplate by DataType, a keyed template, a template selector, a CollectionViewSource
+        //     with a SortDescription, StringFormat, and a ValidationRule.
+        try
+        {
+            var misc = new Misc();
+            var host = new Window { Content = misc, Width = 400, Height = 500 };
+            host.Show();
+            host.UpdateLayout();
+            misc.Click();
+            string TextOf(string name) => (System.Windows.Media.VisualTreeHelper.GetChildrenCount((DependencyObject)misc.FindName(name)!) > 0 ? FirstText((DependencyObject)misc.FindName(name)!) : "");
+            string FirstText(DependencyObject node)
+            {
+                if (node is TextBlock t) return t.Text;
+                for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++) { var r = FirstText(System.Windows.Media.VisualTreeHelper.GetChild(node, i)); if (r.Length > 0) return r; }
+                return "";
+            }
+            var sorted = (ListBox)misc.FindName("Sorted")!;
+            var chosen = (ListBox)misc.FindName("Chosen")!;
+            var validated = (TextBox)misc.FindName("Validated")!;
+            validated.Text = "-4";
+            var invalid = Validation.GetHasError(validated);
+            validated.Text = "4";
+            var valid = !Validation.GetHasError(validated);
+            var order = string.Join(",", sorted.Items.Cast<Number>().Select(n => n.Value));
+            var picked = string.Join(",", Enumerable.Range(0, chosen.Items.Count).Select(i => FirstText((DependencyObject)chosen.ItemContainerGenerator.ContainerFromIndex(i))));
+            Check("misc", misc.Clicks == 1 && ((Button)misc.FindName("Clicker")!).Content is "click me" && TextOf("Cat") == "cat tom" && TextOf("Dog") == "dog rex"
+                    && order == "9,5,2" && picked == "cat a,dog b" && invalid && valid,
+                $"clicks={misc.Clicks} caption='{((Button)misc.FindName("Clicker")!).Content}' implicit='{TextOf("Cat")}' keyed='{TextOf("Dog")}' sorted={order} selector={picked} invalid={invalid} valid={valid}");
+            host.Close();
+        }
+        catch (Exception e)
+        {
+            Check("misc", false, e.GetType().Name + ": " + e.Message);
+        }
+
         Console.WriteLine(ok ? "PASS" : "FAIL");
         Environment.ExitCode = ok ? 0 : 1;
     }

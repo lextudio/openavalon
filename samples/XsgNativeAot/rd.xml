@@ -1,0 +1,8 @@
+<Directives xmlns="http://schemas.microsoft.com/netfx/2013/01/metadata">
+  <Application>
+    <!-- CollectionView sorts, groups and filters by property name (SortDescription.PropertyName) with reflection over the item type. -->
+    <Assembly Name="XsgAot">
+      <Type Name="XsgAot.Number" Dynamic="Required All" />
+    </Assembly>
+  </Application>
+</Directives>

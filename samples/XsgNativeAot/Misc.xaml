@@ -1,0 +1,31 @@
+<UserControl x:Class="XsgAot.Misc"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:XsgAot"
+             xmlns:scm="clr-namespace:System.ComponentModel;assembly=WindowsBase"
+             x:DataType="local:MiscModel">
+  <UserControl.Resources>
+    <local:KindSelector x:Key="Selector" />
+    <DataTemplate DataType="{x:Type local:Cat}"><TextBlock x:Name="CatText" Text="{Binding Name, StringFormat=cat {0}}" /></DataTemplate>
+    <DataTemplate x:Key="Dog" x:DataType="local:Dog"><TextBlock Text="{Binding Name, StringFormat=dog {0}}" /></DataTemplate>
+    <CollectionViewSource x:Key="Sorted" Source="{Binding Numbers}">
+      <CollectionViewSource.SortDescriptions>
+        <scm:SortDescription PropertyName="Value" Direction="Descending" />
+      </CollectionViewSource.SortDescriptions>
+    </CollectionViewSource>
+  </UserControl.Resources>
+  <StackPanel>
+    <Button x:Name="Clicker" Content="{x:Static local:MiscModel.Caption}" Click="OnClick" />
+    <ContentControl x:Name="Cat" Content="{Binding Pet}" />
+    <ContentControl x:Name="Dog" Content="{Binding Dog}" ContentTemplate="{StaticResource Dog}" />
+    <ListBox x:Name="Chosen" ItemsSource="{Binding Pets}" ItemTemplateSelector="{StaticResource Selector}" />
+    <ListBox x:Name="Sorted" ItemsSource="{Binding Source={StaticResource Sorted}}" DisplayMemberPath="Value" />
+    <TextBox x:Name="Validated">
+      <TextBox.Text>
+        <Binding Path="Age" UpdateSourceTrigger="PropertyChanged">
+          <Binding.ValidationRules><local:PositiveRule /></Binding.ValidationRules>
+        </Binding>
+      </TextBox.Text>
+    </TextBox>
+  </StackPanel>
+</UserControl>
