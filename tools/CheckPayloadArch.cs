@@ -20,9 +20,6 @@ foreach (var pkg in Directory.GetFiles(feed, "*.nupkg").Order(StringComparer.Ord
         if (machine is null) continue;
         // 0x014c is both AnyCPU and x86, and is always acceptable.
         if (machine == "014c") continue;
-        // DirectWriteForwarder is C++/CLI and cannot be AnyCPU, yet it has to appear in lib/<tfm>
-        // so a RID-neutral restore resolves the reference; see dist.local.sh.
-        if (Regex.IsMatch(name, @"^lib/[^/]+/DirectWriteForwarder\.dll$")) continue;
         if (name.StartsWith("runtimes/", StringComparison.Ordinal))
         {
             var rid = name.Split('/')[1];

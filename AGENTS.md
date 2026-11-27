@@ -197,23 +197,18 @@ Required workstation tools:
 
 - Git for Windows Bash. Invoke the Bash scripts with `C:/Program Files/Git/bin/bash.exe`; do not
   run them in PowerShell directly.
-- Visual Studio 2026 Community (VS 18) with the minimal **Desktop development with C++** toolchain:
-  MSBuild, MSVC C++ build tools, Windows SDK, and C++/CLI support. `WindowsFormsIntegration` is
-  C++/CLI, so a normal `dotnet msbuild` discovery path is insufficient.
+- Visual Studio 2026 Community (VS 18) with the minimal **Desktop development with C++** toolchain
+  (MSVC C++ build tools, Windows SDK). It is needed for the ProGPU native renderer
+  (`build-progpu-native-windows.ps1 -Compiler MSVC`), **not** for LibreWPF: LibreWPF has no C++/CLI
+  or other native C++ build in the packaged closure any more. `DirectWriteForwarder` and the
+  C++/CLI `System.Printing` are gone from the default build (text goes through
+  `ProGPU.Text.Shaping` on every OS, `System.Printing` is the managed surface); they only build
+  with `-p:LibreWpfUseCppCli=true`, which needs the C++/CLI workload plus `ijwhost.dll`.
+  `WindowsFormsIntegration` is plain C#.
 
-The scripts expect these installed locations:
-
-```text
-C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe
-C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Microsoft/VC/v180
-```
-
-`dist.local.sh` sets `VCTargetsPath`, uses VS MSBuild for LibreWPF validation graphs, supplies the
-required `ijwhost.dll`, and sets `CL=/MP1`. No LibreWPF C++ project enables `/MP`, so `/MP1` is
-only a guard; what actually serializes the native build is `run_wpf_msbuild`'s single MSBuild node,
-kept because concurrent native projects exhausted memory around the `System.Printing` PCH.
-`DIST_LOCAL_WINDOWS_MSBUILD_NODES=<n>` raises it on a workstation with memory to spare (not yet
-measured).
+`dist.local.sh` builds the LibreWPF managed graphs with the pinned `dotnet` on every lane
+(`run_wpf_msbuild`), so there is no `VCTargetsPath`, VS `MSBuild.exe`, `IjwHostSourcePath` or `CL`
+handling and no single-node restriction.
 
 ```bash
 "C:/Program Files/Git/bin/bash.exe" ./dist.local.sh
@@ -242,8 +237,8 @@ clean checkout does not depend on an earlier developer build's `artifacts/` tree
   `..._CARGO_HOME`), else `artifacts/tools/rustup-<arch>/{cargo-home,rustup-home}`, else `rustup`
   on `PATH`.
 
-It then regenerates the per-RID managed runtime payload with
-`eng/progpu-wpf-windows-managed-runtime.ps1` and builds both canonical WinForms slices (below).
+It then builds both canonical WinForms slices (below). There is no per-RID managed runtime payload
+any more: PresentationCore is one portable assembly in `lib/<tfm>`.
 Every one of these PowerShell steps is followed by an artifact check, because `pwsh -File` can
 exit 0 after a terminating error.
 
@@ -330,7 +325,10 @@ matter more than the rules:
 
   Keep the audit anyway: it reports rather than fails, and it is what turns the next such gap into
   a line of output instead of a `CS8012` in one unrelated consumer project weeks later.
-- **The consumer SDK must prefer `runtimes/<rid>/` over `lib/`, in BOTH branches.**
+- **The consumer SDK must prefer `runtimes/<rid>/` over `lib/`, in BOTH branches.** (History: this
+  mattered while the package carried per-RID `PresentationCore`/`DirectWriteForwarder`; the transport
+  now ships no `runtimes/<rid>/lib`, and `eng/progpu-preview-package-audit.sh` rejects one. Keep the
+  rule for any future per-RID managed asset.)
   `_ProGpuWpfSdkCopyManagedTransportRuntimeAssets` in `ProGPU.Wpf.Sdk.targets` runs after NuGet has
   already placed the correct per-RID assets, so copying `lib/` wholesale silently overwrote them —
   the arm64 `DirectWriteForwarder` copied first, the x64 one over it moments later, and the ARM64
@@ -382,8 +380,8 @@ source.
 
 ## Dual-architecture canonical WindowsFormsIntegration (Windows lane)
 
-`WindowsFormsIntegration.dll` is C++/CLI, and several ProGPU bridge assemblies are
-architecture-specific, so the Windows release needs one canonical feed per architecture.
+`WindowsFormsIntegration.dll` is C# (AnyCPU) now, but several ProGPU bridge assemblies are
+architecture-specific, so the Windows release still builds one canonical feed per architecture.
 `dist.local.sh` builds both, x64 first and ARM64 last:
 
 ```text

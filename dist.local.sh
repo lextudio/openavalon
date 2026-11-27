@@ -117,18 +117,6 @@ elif [[ ! -x "${wpf_dotnet}" ]]; then
   wpf_dotnet="dotnet"
 fi
 
-# The Windows managed build uses ijwhost from the SDK that LibreWPF pins. The
-# SDK pack is versioned as the runtime (11.0.0-rc.2...), rather than the
-# feature-band compiler version (11.0.100-rc.2...), so derive it from the
-# single source of truth instead of embedding an obsolete preview path.
-wpf_sdk_version="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "${wpf_root}/global.json" | head -n 1)"
-if [[ -z "${wpf_sdk_version}" ]]; then
-  echo "Unable to read LibreWPF's pinned SDK version from ${wpf_root}/global.json." >&2
-  exit 1
-fi
-wpf_runtime_pack_version="${wpf_sdk_version/.100-/.0-}"
-wpf_ijwhost_path="${wpf_root}/.dotnet/packs/Microsoft.NETCore.App.Host.win-x64/${wpf_runtime_pack_version}/runtimes/win-x64/native/ijwhost.dll"
-
 mkdir -p "${local_feed}"
 
 if [[ "${target_platform}" != "all" && "${target_platform}" != "macos" && "${target_platform}" != "windows" ]]; then
@@ -163,24 +151,6 @@ if [[ "${target_platform}" == "windows" ]]; then
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-true}"
   # The FreeType/ICU package verifiers otherwise require every RID they know.
   export ProGpuNativePackageRids="${ProGpuNativePackageRids:-win-x64 win-arm64}"
-  if [[ "${stage_native_only}" != "1" ]]; then
-    # MSBuild's /m switch does not constrain cl.exe's own /MP workers.  The
-    # System.Printing PCH is large enough to exhaust this workstation otherwise.
-    export CL="${CL:-} /MP1"
-    # dotnet msbuild does not discover Visual C++ targets by itself.  Supply the
-    # installed VS targets so LibreWPF's native projects can restore and build.
-    if [[ -z "${VCTargetsPath:-}" ]]; then
-      vs_vc_targets='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Microsoft/VC/v180'
-      if [[ -f "${vs_vc_targets}/Microsoft.Cpp.Default.props" ]]; then
-        export VCTargetsPath="$(cygpath -w "${vs_vc_targets}")\\"
-      fi
-    fi
-    wpf_msbuild='C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe'
-    if [[ ! -x "${wpf_msbuild}" ]]; then
-      echo "Visual Studio MSBuild.exe is required for LibreWPF validation graphs." >&2
-      exit 1
-    fi
-  fi
 else
   export PROGPU_PACKAGE_WINDOWS_ONLY="${PROGPU_PACKAGE_WINDOWS_ONLY:-0}"
   export ProGpuNativePackageWindowsOnly="${ProGpuNativePackageWindowsOnly:-false}"
@@ -208,18 +178,10 @@ if [[ "${target_platform}" == "macos" ]]; then
   fi
 fi
 
+# LibreWPF has no C++/CLI or other native C++ build any more, so every lane builds the managed
+# graphs with the pinned .NET SDK; Visual Studio is not needed for this part.
 run_wpf_msbuild() {
-  if [[ "${target_platform}" == "windows" ]]; then
-    # One node by default: concurrent native projects were what exhausted memory around the
-    # System.Printing PCH (CL=/MP1 above does not parallelize anything - no project enables /MP).
-    # DIST_LOCAL_WINDOWS_MSBUILD_NODES raises it on a workstation with the memory to spare.
-    "${wpf_msbuild}" "$@" \
-      -m:"${DIST_LOCAL_WINDOWS_MSBUILD_NODES:-1}" \
-      -property:Platform=x64 \
-      -property:IjwHostSourcePath="${wpf_ijwhost_path}"
-  else
-    "${wpf_dotnet}" msbuild "$@"
-  fi
+  "${wpf_dotnet}" msbuild "$@"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -372,9 +334,8 @@ pack_wpf_project() {
   # no-op for those two - and because the previous .nupkg is deleted first, the
   # feed simply lost them.
   #
-  # Genuinely architecture-specific payload (the C++/CLI DirectWriteForwarder,
-  # PresentationCore) is NOT packed here; it ships under runtimes/<rid>/ and the
-  # consumer selects it per RID.
+  # The managed assemblies (PresentationCore included) are architecture neutral. Only the native
+  # runtime assets ship under runtimes/<rid>/native, and the consumer selects them per RID.
   local pack_platform=AnyCPU
   retire_feed_files \
     "${local_feed}/${package_id}.${package_version}.nupkg" \
@@ -386,7 +347,7 @@ pack_wpf_project() {
     -p:Version="${package_version}" \
     -p:PackageVersion="${package_version}" \
     "$@" \
-    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform} -p:IjwHostSourcePath=${wpf_ijwhost_path}")
+    $([[ "${target_platform}" == "windows" ]] && echo "-p:Platform=${pack_platform}")
   # A skipped pack target still exits 0, so the exit code alone cannot tell a
   # real pack from one that produced nothing.  Verify the artifact instead.
   if [[ ! -f "${local_feed}/${package_id}.${package_version}.nupkg" ]]; then
@@ -435,7 +396,7 @@ EOF
     -property:Version="${package_version}" \
     -property:PackageVersion="${package_version}" \
     -property:PlatformTarget=AnyCPU \
-    $([[ "${target_platform}" == "windows" ]] && echo "-property:Platform=AnyCPU -property:IjwHostSourcePath=${wpf_ijwhost_path}")
+    $([[ "${target_platform}" == "windows" ]] && echo "-property:Platform=AnyCPU")
   rm -rf "$(dirname "${traversal}")"
   for pair in "$@"; do
     if [[ ! -f "${local_feed}/${pair##*:}.${package_version}.nupkg" ]]; then
@@ -778,56 +739,6 @@ else
   cp -f "${progpu_reused[@]}" "${local_feed}/"
 fi
 
-# The per-RID managed payload (runtimes/<rid>/lib/net10.0/{PresentationCore,DirectWriteForwarder})
-# does NOT come from the transport build: the ArchNeutral project copies it out of
-# artifacts/windows-managed-runtime, which only eng/progpu-wpf-windows-managed-runtime.ps1
-# produces. dist.local.sh used to consume that directory without ever regenerating it, so the
-# package shipped a two-week-old PresentationCore beside a freshly built PresentationFramework.
-# Sync-LibreWpfDevelopmentRuntime installs exactly those two per-RID files last, so the stale
-# PresentationCore won - and the app died on first text box with
-# "MissingMethodException: InputManager.get_UsesPortableInput()", an API the fresh
-# PresentationFramework expected and the stale PresentationCore did not have.
-if [[ "${target_platform}" == "windows" ]]; then
-  section "Producing the per-RID Windows managed runtime payload"
-  # A dozen Arcade builds; skipped when every tree it compiles from is unchanged. System.Private.
-  # Windows.Core comes from LibreWinForms and the interop from ProGPU, so all three trees count.
-  managed_runtime_dir="${wpf_root}/artifacts/windows-managed-runtime"
-  managed_runtime_fingerprint="$({
-    echo "Release $("${wpf_dotnet}" --version)"
-    repo_fingerprint "${wpf_root}"
-    repo_fingerprint "${winforms_root}"
-    repo_fingerprint "${progpu_root}"
-  } | sha256_stdin)"
-  if ! stage_is_current managed-runtime "${managed_runtime_fingerprint}"; then
-    invalidate_stage managed-runtime
-    pwsh -NoProfile -File "${wpf_root}/eng/progpu-wpf-windows-managed-runtime.ps1" -Configuration Release
-    managed_runtime_files=()
-    while IFS= read -r staged; do
-      managed_runtime_files+=("${staged}")
-    done < <(find "${managed_runtime_dir}" -type f -name '*.dll' | LC_ALL=C sort)
-  fi
-  # `pwsh -File` reports 0 even when the script dies on a terminating error, so `set -e` never
-  # fired: the script deleted the payload directory, threw on its first Join-Path, and the pack
-  # step then shipped whatever per-RID files happened to survive from an earlier run. Assert the
-  # artifacts this feed actually consumes instead of trusting the exit code - the same lesson as
-  # pack_wpf_project below.
-  # win-x86 is not produced or shipped; see the comment in the script and in the transport csproj.
-  for rid in win-x64 win-arm64; do
-    for dll in PresentationCore DirectWriteForwarder; do
-      staged="${wpf_root}/artifacts/windows-managed-runtime/${rid}/net10.0/${dll}.dll"
-      if [[ ! -f "${staged}" ]]; then
-        echo "The per-RID managed runtime payload is missing ${rid}/${dll}.dll." >&2
-        echo "progpu-wpf-windows-managed-runtime.ps1 did not complete; do not pack on top of this." >&2
-        exit 1
-      fi
-    done
-  done
-  # Recorded only after the payload checks above pass.
-  if [[ -n "${managed_runtime_files+x}" ]]; then
-    record_stage managed-runtime "${managed_runtime_fingerprint}" "${managed_runtime_files[@]}"
-  fi
-fi
-
 # LibreWPF.Transport is zipped from a staging tree, not from a project's build output, and that
 # tree is additive: RemoveStaleLibreWpfTransportPayload deliberately excludes the CURRENT target
 # framework's folder, so a file that once landed in lib/<tfm> and is no longer produced stays
@@ -840,10 +751,15 @@ transport_staging="${wpf_root}/artifacts/packaging/Release/LibreWPF.Transport"
 if [[ -d "${transport_staging}" ]]; then
   section "Clearing stale LibreWPF.Transport staging payload"
   rm -rf "${transport_staging}/lib" "${transport_staging}/ref"
+  # Earlier packs shipped a per-RID PresentationCore/DirectWriteForwarder under runtimes/<rid>/lib. Nothing
+  # produces that payload any more, so a copy left in an incremental staging tree would be re-shipped
+  # (the audit rejects runtimes/*/lib, but fail before packing rather than after). Native assets under
+  # runtimes/<rid>/native are pack items and stay untouched.
+  rm -rf "${transport_staging}"/runtimes/*/lib
 fi
 
 # canonical_feed is the one librewinforms-pack.sh qualifies against. On Windows it is the ARM64
-# slice, and the x64 peer is built beside it: WindowsFormsIntegration is C++/CLI, and OpenDevelop's
+# slice, and the x64 peer is built beside it: several ProGPU bridge assemblies are architecture-specific (WindowsFormsIntegration itself is AnyCPU C# now), and OpenDevelop's
 # patch-librewinforms-deps.ps1 takes both feeds (-WindowsArm64PackageRoot / -WindowsX64PackageRoot)
 # to fill runtimes/win-arm64 and runtimes/win-x64. On macOS the graph is built without a platform
 # (portable AnyCPU managed code, which runs natively on Apple silicon).
