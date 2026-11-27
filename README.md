@@ -7,6 +7,80 @@ This is an integration and packaging repository. The framework source is pinned
 through the `LibreWPF` submodule; OpenAvalon builds, verifies, and publishes one
 version-aligned closure to lextudio GitHub Packages.
 
+## Why XSG, NativeAOT, and F# matter
+
+The closure is not only a version-alignment exercise. It carries three
+framework capabilities that change what a WPF-style application can be.
+
+### XAML Source Generator (XSG)
+
+XSG compiles XAML into ordinary C# at build time instead of leaving it as BAML
+for `System.Xaml` to load and reflect over at run time. That removes a large
+reflection surface in a WPF application; under `x:DataType`, `{Binding}` paths
+become typed accessors and a wrong path is a build error. It is also what makes
+trimming and NativeAOT possible at all.
+
+This is not a toy path. With `-p:LibreWpfXsgThemes=true`, the build compiles the
+in-box theme dictionaries (Aero2, Aero, AeroLite, Classic, Royale, Luna, and
+Fluent) for equivalence testing, and a harness compares each generated
+dictionary with its BAML original; for Aero2 that is 376 keys compared, 4
+explained differences, 0 unexplained. The shipped theme assemblies still use the
+BAML compiler. `samples/XsgMixed` proves that XSG-compiled and BAML-compiled
+assemblies interoperate in one solution (49 cases, both directions).
+
+BAML remains the default. Opt in per project:
+
+```xml
+<PropertyGroup>
+  <UseLibreWpfXamlSourceGenerator>true</UseLibreWpfXamlSourceGenerator>
+</PropertyGroup>
+```
+
+See the [XSG usage guide](LibreWPF/Documentation/XamlSourceGeneratorUsage.md)
+and [samples/XsgMixed](samples/XsgMixed/README.md).
+
+### NativeAOT
+
+[samples/XsgNativeAot](samples/XsgNativeAot/README.md) publishes a WPF-style
+window as one native Mach-O executable on macOS arm64: no JIT, no BAML, and no
+`System.Xaml` at run time.
+Its 20 self-checks cover window and template creation, compiled bindings (source
+to target, INPC updates, TwoWay), `StartupUri`, `ResourceDictionary Source`, a
+`UserControl`, a custom `Themes/Generic.xaml`, `Frame` navigation, and the real
+in-box Aero2 theme. The JIT and NativeAOT builds produce the same 135-element
+visual tree (only the native window frame differs) and, in the last measured
+run, pixel-identical window content. That is the difference between "a WPF app
+that starts a JIT" and a self-contained native application that keeps WPF's
+programming model.
+
+Boundaries: the working prototype target is macOS arm64. Windows and Linux
+NativeAOT are still planned; `XamlReader`/loose BAML, WinForms interop, and
+printing/XPS stay outside the AOT subset. See
+[LibreWPF's NativeAOT plan](LibreWPF/Documentation/NativeAotPlan.md).
+
+### F#
+
+F# has neither source generators nor partial classes, which used to make the
+compile-time XAML path unavailable to it. `LibreWPF.Xaml.FSharp.Tool` (shipped in
+the SDK under `tools/xsg-fsharp`) runs the same XSG over the project's reference
+compilation, prints the generated object graph as F#, and the SDK compiles the
+`.g.fs` files ahead of the project's own sources. Each `x:Class` becomes an F#
+class that inherits the root element, declares its `x:Name` fields, and builds
+the tree in its constructor. `PortableBootstrap.fs` replaces the C# module
+initializer, and `[<XsgComponent>]` registers resource paths.
+
+Enable it in a `.fsproj` with the same
+`UseLibreWpfXamlSourceGenerator=true`. C# expressions in XAML are not part of
+the F# output; event handlers named in XAML are resolved by name on the run-time
+type, so write them in a subclass. Because it is the same XSG pipeline, F# gets
+the same trimming and NativeAOT direction, not a separate reflective shortcut.
+
+These are preview features, not a claim that every WPF application is ready for
+NativeAOT today. They are why this closure is more than a rebuild of upstream
+WPF: the XAML, theme, binding, and language pipelines are moving from run-time
+reflection to compile-time code, and the samples and equivalence gates in this
+repository are the evidence.
+
 ## What's published
 
 The closure includes:
