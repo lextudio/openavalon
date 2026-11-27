@@ -44,6 +44,10 @@ jobs:
         run: |
           git submodule update --init --depth 1 LibreWPF
           git -C LibreWPF submodule update --init --depth 1 external/LibreWinForms external/ProGPU
+          # PrintingTools exists only from the managed System.Printing pin; older pins have no such pathspec.
+          if git -C LibreWPF config -f .gitmodules --get submodule.external/PrintingTools.path >/dev/null; then
+            git -C LibreWPF submodule update --init --depth 1 external/PrintingTools
+          fi
       - name: Check the pinned submodule commits
         shell: bash
         run: ./tools/preflight-publish.sh

@@ -8,7 +8,8 @@
 # repository (not whatever happens to be checked out), so it answers "what would CI check out".
 #
 # Needs these checked out (the workflow's preflight job initializes exactly these):
-#   LibreWPF, LibreWPF/external/LibreWinForms        (and LibreWPF/external/ProGPU for the list check)
+#   LibreWPF, LibreWPF/external/LibreWinForms, LibreWPF/external/PrintingTools when the pin records it
+#   (and LibreWPF/external/ProGPU for the list check)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,10 +38,27 @@ git -C "${winforms_dir}" cat-file -e "${winforms}^{commit}" 2>/dev/null \
 
 winforms_progpu="$(gitlink "${winforms_dir}" "${winforms}" external/ProGPU)"
 
+# PrintingTools is the managed System.Printing submodule. A missing or unpushed pin would otherwise
+# surface only in the 90-minute build job, so check it here with the rest of the chain. Pins from
+# before the submodule existed (no gitlink recorded) are accepted.
+printingtools="$(gitlink "${root}/LibreWPF" "${librewpf}" external/PrintingTools)"
+if [[ -n "${printingtools}" ]]; then
+  printingtools_dir="${root}/LibreWPF/external/PrintingTools"
+  [[ -d "${printingtools_dir}/.git" || -f "${printingtools_dir}/.git" ]] \
+    || { echo "preflight: PrintingTools is not checked out (git -C LibreWPF submodule update --init external/PrintingTools)." >&2; exit 1; }
+  git -C "${printingtools_dir}" cat-file -e "${printingtools}^{commit}" 2>/dev/null \
+    || { echo "preflight: PrintingTools commit ${printingtools} (pinned by LibreWPF ${librewpf}) is not in the checkout: push it to lextudio/PrintingTools." >&2; exit 1; }
+fi
+
 echo "openavalon -> LibreWPF ${librewpf}"
 echo "  LibreWPF pins ProGPU          ${progpu}"
 echo "  LibreWPF pins LibreWinForms   ${winforms}"
 echo "    LibreWinForms pins ProGPU   ${winforms_progpu:-missing}"
+if [[ -n "${printingtools}" ]]; then
+  echo "  LibreWPF pins PrintingTools   ${printingtools}"
+else
+  echo "  LibreWPF pins PrintingTools   (not recorded by this pin)"
+fi
 
 if [[ "${winforms_progpu}" != "${progpu}" ]]; then
   fail "LibreWinForms ${winforms} pins ProGPU ${winforms_progpu:-missing}, but LibreWPF ${librewpf} pins ${progpu}." \
