@@ -438,6 +438,11 @@ if [[ "${target_platform}" == "windows" ]]; then
       continue
     fi
     invalidate_stage "${native_stage}"
+    # The staged-payload cache can restore the previous RID package even when the
+    # stage fingerprint no longer matches (the cache key is only a subset of the
+    # fingerprint). The FreeType and EDIT ICU verifiers refuse to overwrite an
+    # existing dependency or notices, so a rebuild starts from an empty stage.
+    rm -rf "${progpu_root}/artifacts/progpu-native/package/runtimes/${rid}"
     # The Windows native builder uses a RID-fixed CMake build directory.  It may
     # retain a compiler choice from an interactive ClangCL attempt; this feed
     # explicitly uses the installed MSVC toolchain, so do not reuse that cache.
